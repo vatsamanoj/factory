@@ -40,6 +40,12 @@ The runtime now supports plugin-driven extension loading:
 
 Important:
 - Goose needs writable runtime dirs. This project sets isolated paths under workspace (`.goose-home`, `.cache`, `.config`).
+- For Kilo Code host execution, `docker/start-goose-bridge.sh` auto-loads:
+  - `GOOSE_PROVIDER=custom_kilo_code`
+  - `GOOSE_MODEL=moonshotai/kimi-k2.5`
+  - `CUSTOM_KILO_CODE_API_KEY` (from `/home/infosys/.config/goose/secrets.yaml` if not already exported)
+  - `container-use` builtin injection for host Goose runs
+  - Optional override file: `server/data/goose-bridge.env`
 
 ## Database Path Rule
 
