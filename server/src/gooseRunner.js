@@ -2812,7 +2812,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   emitLine(broadcast, task.id, `${primaryName}> git mode: Goose-owned workflow (fetch/pull/commit/push/PR)`);
   emitLine(broadcast, task.id, `${primaryName}> plugin extensions: ${extensionArgs.length ? 'enabled' : 'none'}`);
   const verboseStream = toBoolEnv(process.env.GOOSE_VERBOSE_STREAM, false);
-  const heartbeatEnabled = true;
+  const heartbeatEnabled = toBoolEnv(process.env.GOOSE_HEARTBEAT_ENABLED, false);
   const heartbeatMs = parsePositiveInt(process.env.GOOSE_HEARTBEAT_MS, 1500);
   const heartbeatOnly = toBoolEnv(process.env.GOOSE_HEARTBEAT_ONLY, true);
   const activityPulseEnabled = !heartbeatOnly;
@@ -2961,13 +2961,17 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
       return;
     }
 
+    const disablePostRunAutomation = toBoolEnv(process.env.GOOSE_DISABLE_POST_RUN_AUTOMATION, false);
     const forceAutoMerge = toBoolEnv(process.env.GOOSE_FORCE_AUTO_MERGE, false);
     const mergeTarget = String(process.env.GOOSE_AUTO_MERGE_TARGET || process.env.GOOSE_TEST_BRANCH || 'test').trim() || 'test';
-    const allowPostRunAutomation = task.assigneeType === 'goose' && project && (project.autoPr || project.autoMerge || forceAutoMerge);
+    const allowPostRunAutomation =
+      !disablePostRunAutomation && task.assigneeType === 'goose' && project && (project.autoPr || project.autoMerge || forceAutoMerge);
     emitLine(
       broadcast,
       task.id,
-      `repo> automation flags: autoPr=${Boolean(project?.autoPr)} autoMerge=${Boolean(project?.autoMerge)} forceAutoMerge=${forceAutoMerge} target=${mergeTarget}`
+      `repo> automation flags: disabled=${disablePostRunAutomation} autoPr=${Boolean(project?.autoPr)} autoMerge=${Boolean(
+        project?.autoMerge
+      )} forceAutoMerge=${forceAutoMerge} target=${mergeTarget}`
     );
     if (allowPostRunAutomation) {
       const prTarget = String(task.baseBranch || project.defaultBranch || 'main').trim() || 'main';

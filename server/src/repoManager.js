@@ -212,7 +212,32 @@ export async function ensureTaskBranch(repo, task, onLog) {
   const gitAuth = authArgs(repo.githubToken || '');
   const explicitBase = String(task?.baseBranch || '').trim();
   const baseBranch = explicitBase || String(repo.defaultBranch || 'main').trim() || 'main';
+  const disableTaskBranch = toBoolEnv(process.env.GOOSE_DISABLE_TASK_BRANCH, false);
   const allowOfflineGit = toBoolEnv(process.env.GOOSE_ALLOW_OFFLINE_GIT, true);
+  if (disableTaskBranch) {
+    emit(`repo> task branch creation disabled; using base branch ${baseBranch}`);
+    await run('git', [...gitAuth, '-C', repo.repoPath, 'fetch', '--all', '--prune'], { cwd: process.cwd() }).catch((error) => {
+      if (allowOfflineGit && isNetworkGitError(error)) {
+        emit(`repo> branch fetch skipped (offline): ${String(error?.message || error).slice(0, 220)}`);
+        return;
+      }
+      throw error;
+    });
+    const hasRemoteBase = await run('git', ['-C', repo.repoPath, 'rev-parse', '--verify', `origin/${baseBranch}`], {
+      cwd: process.cwd()
+    })
+      .then(() => true)
+      .catch(() => false);
+    if (hasRemoteBase) {
+      await run('git', ['-C', repo.repoPath, 'checkout', '-B', baseBranch, `origin/${baseBranch}`], { cwd: process.cwd() });
+      await run('git', [...gitAuth, '-C', repo.repoPath, 'pull', '--ff-only', 'origin', baseBranch], { cwd: process.cwd() }).catch(
+        () => {}
+      );
+    } else {
+      await run('git', ['-C', repo.repoPath, 'checkout', baseBranch], { cwd: process.cwd() });
+    }
+    return baseBranch;
+  }
   emit(`repo> preparing task branch ${branch}`);
   await run('git', [...gitAuth, '-C', repo.repoPath, 'fetch', '--all', '--prune'], { cwd: process.cwd() }).catch((error) => {
     if (allowOfflineGit && isNetworkGitError(error)) {
