@@ -778,6 +778,11 @@ export function stopGooseExecution(taskId, { broadcast } = {}) {
   activeRuns.set(id, next);
   const actor = 'Rajiv Gupta (Boss)';
   if (broadcast) emitLine(broadcast, id, `${actor}> manual stop requested by user; terminating active execution.`);
+  releaseTaskExecutionLease({
+    taskId: id,
+    runId: String(run.runId || ''),
+    status: 'cancelled'
+  });
   if (next.bridgeAbortController && !next.bridgeAbortController.signal.aborted) {
     try {
       next.bridgeAbortController.abort();
@@ -790,7 +795,7 @@ export function stopGooseExecution(taskId, { broadcast } = {}) {
       next.child.kill('SIGTERM');
       setTimeout(() => {
         try {
-          if (!next.child.killed) next.child.kill('SIGKILL');
+          next.child.kill('SIGKILL');
         } catch {
           // ignore forced kill errors
         }
@@ -799,7 +804,9 @@ export function stopGooseExecution(taskId, { broadcast } = {}) {
       // ignore kill errors
     }
   }
-  activeRuns.delete(id);
+  if (!next.child && !next.bridgeAbortController) {
+    activeRuns.delete(id);
+  }
   return { stopped: true, runId: String(run.runId || '') };
 }
 
@@ -2690,6 +2697,10 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
 
   activeRuns.set(task.id, { startedAt: Date.now(), runId });
   const isCurrentRun = () => !leaseOwnershipLost && activeRuns.get(task.id)?.runId === runId;
+  const isStopRequested = () => {
+    const current = activeRuns.get(task.id);
+    return Boolean(current && current.runId === runId && current.stopRequested);
+  };
   const clearRunIfCurrent = () => {
     if (!isCurrentRun()) return;
     activeRuns.delete(task.id);
@@ -3192,6 +3203,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     setPhase('waiting_for_events');
     const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 900);
     const activityPulse = setInterval(() => {
+      if (isStopRequested()) return;
       const idleSec = Math.floor((Date.now() - phaseUpdatedAt) / 1000);
       emitLine(
         broadcast,
@@ -3267,6 +3279,13 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     setPhase(bridgeResult.code === 0 ? 'completed' : 'failed');
     emitLine(broadcast, task.id, `${primaryName}> process exited code=${bridgeResult.code} after ${durationSec}s`);
     if (bridgeResult.code !== 0) {
+      if (isStopRequested()) {
+        clearInterval(primaryThinkingTicker);
+        clearInterval(leaseHeartbeat);
+        releaseLease('cancelled');
+        clearRunIfCurrent();
+        return;
+      }
       const detail = bridgeResult.reason ? ` (${String(bridgeResult.reason).slice(0, 220)})` : '';
       emitLine(broadcast, task.id, `${primaryName}> bridge run failed${detail}`);
       updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
@@ -3341,6 +3360,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   let lastOutputAt = startedAt;
   const heartbeat = heartbeatEnabled
     ? setInterval(() => {
+        if (isStopRequested()) return;
         const seconds = Math.floor((Date.now() - startedAt) / 1000);
         const silenceMs = Date.now() - lastOutputAt;
         const waitingForFirstEvent = eventSeq === 0 && (currentPhase === 'waiting_for_events' || currentPhase === 'session_started');
@@ -3367,6 +3387,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   setPhase('waiting_for_events');
   const activityPulse = activityPulseEnabled
     ? setInterval(() => {
+        if (isStopRequested()) return;
         const idleSec = Math.floor((Date.now() - phaseUpdatedAt) / 1000);
         emitLine(
           broadcast,
@@ -3475,13 +3496,19 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   });
 
   child.on('error', () => {
-    if (!isCurrentRun()) return;
+    if (!isCurrentRun() && !isStopRequested()) return;
     closed = true;
     clearTimeout(timeout);
     if (forceKillTimer) clearTimeout(forceKillTimer);
     if (heartbeat) clearInterval(heartbeat);
     if (activityPulse) clearInterval(activityPulse);
     clearInterval(primaryThinkingTicker);
+    if (isStopRequested()) {
+      clearInterval(leaseHeartbeat);
+      releaseLease('cancelled');
+      clearRunIfCurrent();
+      return;
+    }
     if (!allowMockFallback) {
       emitLine(
         broadcast,
@@ -3503,7 +3530,8 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   });
 
   child.on('close', (code) => {
-    if (!isCurrentRun()) return;
+    const manualStopped = isStopRequested();
+    if (!isCurrentRun() && !manualStopped) return;
     closed = true;
     clearTimeout(timeout);
     if (forceKillTimer) clearTimeout(forceKillTimer);
@@ -3513,6 +3541,12 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     const durationSec = Math.floor((Date.now() - startedAt) / 1000);
     setPhase(code === 0 ? 'completed' : 'failed');
     emitLine(broadcast, task.id, `${primaryName}> process exited code=${code} after ${durationSec}s`);
+    if (manualStopped) {
+      clearInterval(leaseHeartbeat);
+      releaseLease('cancelled');
+      clearRunIfCurrent();
+      return;
+    }
     if (code !== 0 && !earlySuccessRequested) {
       updateTaskStatusIfCurrent({
         status: timedOut || stalled ? 'todo' : 'triage',
