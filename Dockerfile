@@ -12,7 +12,7 @@ WORKDIR /app
 
 RUN apk add --no-cache nginx git bash ripgrep curl ca-certificates \
   && update-ca-certificates \
-  && CONFIGURE=false sh -c "$(curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh)" \
+  && CONFIGURE=false bash -lc "$(curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh)" \
   && ln -sf /root/.local/bin/goose /usr/local/bin/goose \
   && goose --version
 
