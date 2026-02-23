@@ -13,7 +13,7 @@ services:
       GOOSE_CODE_INDEX_LANCEDB_DIR: /app/server/data/codeintel.lancedb
       GOOSE_REPO_ROOT: /work/repo
       GOOSE_BRIDGE_URL: http://host.docker.internal:8788
-      GOOSE_BRIDGE_TOKEN: ${GOOSE_BRIDGE_TOKEN:-factory-bridge-token}
+      GOOSE_BRIDGE_TOKEN: factory-bridge-token
       GOOSE_BRIDGE_CWD_MAP: /work/repo:/home/infosys/work/repo
       GOOSE_BRIDGE_PROBE_RETRIES: "3"
       GOOSE_BRIDGE_CONNECT_RETRIES: "2"

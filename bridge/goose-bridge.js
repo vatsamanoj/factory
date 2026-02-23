@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 
 const bind = String(process.env.GOOSE_BRIDGE_BIND || '0.0.0.0').trim();
 const port = Number.parseInt(String(process.env.GOOSE_BRIDGE_PORT || '8788'), 10) || 8788;
-const token = String(process.env.GOOSE_BRIDGE_TOKEN || '').trim();
+const token = 'factory-bridge-token';
 const maxBodyBytes = Number.parseInt(String(process.env.GOOSE_BRIDGE_MAX_BODY_BYTES || '1048576'), 10) || 1048576;
 const maxConcurrentRuns = Number.parseInt(String(process.env.GOOSE_BRIDGE_MAX_CONCURRENT_RUNS || '2'), 10) || 2;
 const probeTimeoutMs = Number.parseInt(String(process.env.GOOSE_BRIDGE_PROBE_TIMEOUT_MS || '10000'), 10) || 10000;
