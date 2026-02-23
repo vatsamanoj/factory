@@ -14,7 +14,7 @@ services:
       GOOSE_REPO_ROOT: /work/repo
       GOOSE_LOCAL_IN_CONTAINER: "1"
       GOOSE_DEFAULT_PROVIDER: "custom_kilo_code"
-      GOOSE_DEFAULT_MODEL: "x-ai/grok-code-fast-1"
+      GOOSE_DEFAULT_MODEL: "kilo/auto"
       GOOSE_NO_PROFILE: "0"
       GOOSE_ENABLE_EVERYTHING: "1"
       GOOSE_FORCE_BUILTINS: "developer,autovisualiser"
