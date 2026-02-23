@@ -23,6 +23,24 @@ seed_goose_dir "/seed/goose/cache" "$GOOSE_CACHE_DIR/goose"
 seed_goose_dir "/seed/goose/share" "$GOOSE_DATA_DIR/goose"
 seed_goose_dir "/seed/goose/state" "$GOOSE_STATE_DIR/goose"
 
+mark_git_safe_directory() {
+  dir="$1"
+  [ -d "$dir" ] || return 0
+  git config --global --add safe.directory "$dir" >/dev/null 2>&1 || true
+}
+
+# Avoid "dubious ownership" errors for host-mounted repositories in container runtime.
+REPO_ROOT="${GOOSE_REPO_ROOT:-/work/repo}"
+mark_git_safe_directory "$REPO_ROOT"
+if [ -d "$REPO_ROOT" ]; then
+  for d in "$REPO_ROOT"/*; do
+    [ -d "$d" ] || continue
+    if [ -d "$d/.git" ]; then
+      mark_git_safe_directory "$d"
+    fi
+  done
+fi
+
 # Start API in background for nginx to proxy /api and /ws.
 node --experimental-sqlite /app/server/src/index.js &
 API_PID=$!
