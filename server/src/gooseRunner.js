@@ -1267,6 +1267,8 @@ async function autoCommitIfDirty({ task, workingDirectory, env, broadcast, label
     return { ok: true, committed: false };
   }
   emitLine(broadcast, task.id, `${label}> committing ${dirty.length} file changes.`);
+  const identityReady = await ensureLocalGitIdentity({ task, workingDirectory, env, broadcast, label });
+  if (!identityReady) return { ok: false, committed: false };
   const add = await runSpawn('git', ['-C', workingDirectory, 'add', '-A'], { cwd: workingDirectory, env });
   if (add.code !== 0) {
     emitLine(broadcast, task.id, `${label}> git add failed: ${String(add.err || add.out || '').trim()}`);
@@ -1282,6 +1284,39 @@ async function autoCommitIfDirty({ task, workingDirectory, env, broadcast, label
   }
   emitLine(broadcast, task.id, `${label}> committed changes.`);
   return { ok: true, committed: true };
+}
+
+async function ensureLocalGitIdentity({ task, workingDirectory, env, broadcast, label }) {
+  const getName = await runSpawn('git', ['-C', workingDirectory, 'config', '--local', '--get', 'user.name'], { cwd: workingDirectory, env });
+  const getEmail = await runSpawn('git', ['-C', workingDirectory, 'config', '--local', '--get', 'user.email'], {
+    cwd: workingDirectory,
+    env
+  });
+  const hasName = getName.code === 0 && String(getName.out || '').trim().length > 0;
+  const hasEmail = getEmail.code === 0 && String(getEmail.out || '').trim().length > 0;
+  if (hasName && hasEmail) return true;
+
+  const name = String(process.env.GOOSE_GIT_USER_NAME || 'Goose Bot').trim();
+  const email = String(process.env.GOOSE_GIT_USER_EMAIL || 'goose-bot@local').trim();
+  const setName = await runSpawn('git', ['-C', workingDirectory, 'config', '--local', 'user.name', name], { cwd: workingDirectory, env });
+  if (setName.code !== 0) {
+    emitLine(broadcast, task.id, `${label}> failed to set local git user.name: ${String(setName.err || setName.out || '').trim()}`);
+    return false;
+  }
+  const setEmail = await runSpawn('git', ['-C', workingDirectory, 'config', '--local', 'user.email', email], {
+    cwd: workingDirectory,
+    env
+  });
+  if (setEmail.code !== 0) {
+    emitLine(
+      broadcast,
+      task.id,
+      `${label}> failed to set local git user.email: ${String(setEmail.err || setEmail.out || '').trim()}`
+    );
+    return false;
+  }
+  emitLine(broadcast, task.id, `${label}> configured local git identity for autonomous commits.`);
+  return true;
 }
 
 function parseGooseOutputLines(rawOutput) {
