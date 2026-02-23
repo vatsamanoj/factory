@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app/server
 
 COPY server/package*.json ./
@@ -10,4 +10,4 @@ COPY server/schemas ./schemas
 RUN mkdir -p /app/server/data
 
 EXPOSE 8787
-CMD ["node", "src/index.js"]
+CMD ["node", "--experimental-sqlite", "src/index.js"]
