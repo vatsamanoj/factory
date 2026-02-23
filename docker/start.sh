@@ -17,8 +17,18 @@ seed_goose_dir() {
   fi
 }
 
-# Seed Goose runtime configuration from host-mounted paths on first boot.
-seed_goose_dir "/seed/goose/config" "$GOOSE_CONFIG_DIR/goose"
+sync_goose_dir() {
+  src="$1"
+  dest="$2"
+  if [ -d "$src" ]; then
+    mkdir -p "$dest"
+    cp -a "$src"/. "$dest"/
+  fi
+}
+
+# Keep Goose runtime config synced from host-mounted settings.
+sync_goose_dir "/seed/goose/config" "$GOOSE_CONFIG_DIR/goose"
+# Cache/share/state are seeded only once.
 seed_goose_dir "/seed/goose/cache" "$GOOSE_CACHE_DIR/goose"
 seed_goose_dir "/seed/goose/share" "$GOOSE_DATA_DIR/goose"
 seed_goose_dir "/seed/goose/state" "$GOOSE_STATE_DIR/goose"
