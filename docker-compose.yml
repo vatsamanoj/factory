@@ -13,10 +13,13 @@ services:
       GOOSE_CODE_INDEX_LANCEDB_DIR: /app/server/data/codeintel.lancedb
       GOOSE_REPO_ROOT: /app/server/data/repos
     volumes:
-      - ./server/data:/app/server/data
+      - factory_server_data:/app/server/data
     networks:
       - dokploy-network
 
 networks:
   dokploy-network:
     external: true
+
+volumes:
+  factory_server_data:
