@@ -14,7 +14,7 @@ services:
       GOOSE_REPO_ROOT: /work/repo
       GOOSE_LOCAL_IN_CONTAINER: "1"
       GOOSE_DEFAULT_PROVIDER: "custom_kilo_code"
-      GOOSE_DEFAULT_MODEL: "moonshotai/kimi-k2.5"
+      GOOSE_DEFAULT_MODEL: "x-ai/grok-code-fast-1"
       GOOSE_HOME: /app/server/data/goose-runtime
       GOOSE_PRESERVE_HOME: "0"
       XDG_CONFIG_HOME: /app/server/data/goose-runtime/.config
