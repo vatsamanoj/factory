@@ -32,6 +32,7 @@ const THINKING_MESSAGES = [
 ];
 const HEARTBEAT_FRAMES = ['|', '/', '-', '\\'];
 const HEARTBEAT_STATES = ['analyzing', 'editing', 'validating', 'checking'];
+const conversationStatusByTask = new Map();
 
 function emitLine(broadcast, taskId, line) {
   const normalized = String(line || '')
@@ -110,9 +111,35 @@ function emitConversation({ broadcast, taskId, from, to, text }) {
   const lines = String(text || '')
     .split('\n')
     .map((line) => line.replace(/\r$/, ''));
+  const normalizeLine = (line) => String(line || '').trim();
+  const isLowSignalToken = (line) => /^[A-Za-z_]+$/.test(line) && line.length <= 16;
+  const mapProgressToken = (line) => {
+    const token = normalizeLine(line).toLowerCase();
+    if (token === 'execute') return 'running tool action...';
+    if (token === 'code_execution') return 'running code execution tool...';
+    if (token === 'success') return 'tool step completed.';
+    if (token === 'failed' || token === 'error') return 'tool step failed.';
+    return '';
+  };
+
   for (const line of lines) {
-    if (!line) continue;
-    emitLine(broadcast, taskId, `${from} -> ${to}: ${line}`);
+    const normalized = normalizeLine(line);
+    if (!normalized) continue;
+
+    const mapped = mapProgressToken(normalized);
+    if (mapped) {
+      const prev = conversationStatusByTask.get(taskId);
+      if (prev !== mapped) {
+        conversationStatusByTask.set(taskId, mapped);
+        emitLine(broadcast, taskId, `${from}> ${mapped}`);
+      }
+      continue;
+    }
+
+    // Drop noisy token-by-token stream fragments; keep sentence-level updates.
+    if (isLowSignalToken(normalized)) continue;
+
+    emitLine(broadcast, taskId, `${from} -> ${to}: ${normalized}`);
   }
 }
 
