@@ -5,12 +5,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: test-factory-dashboard
+    container_name: factory-dashboard
     restart: always
     expose:
-      - "5174"
+      - "5173"
     ports:
-      - "5174:5174"
+      - "5173:5173"
     networks:
       - dokploy-network
 
