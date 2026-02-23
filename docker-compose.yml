@@ -23,6 +23,8 @@ services:
       GOOSE_SUBAGENTS_MAX: "1"
       GOOSE_MANAGER_REQUIRED: "0"
       GOOSE_ALLOW_MOCK_FALLBACK: "0"
+      GOOSE_NO_OUTPUT_TIMEOUT_MS: "600000"
+      GOOSE_INITIAL_NO_OUTPUT_TIMEOUT_MS: "900000"
     volumes:
       - /home/infosys/work/repo:/work/repo
       - /home/infosys/.config/goose:/seed/goose/config:ro
