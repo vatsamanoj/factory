@@ -12,11 +12,21 @@ services:
       DASHBOARD_DB_PATH: /app/server/data/dashboard.db
       GOOSE_CODE_INDEX_LANCEDB_DIR: /app/server/data/codeintel.lancedb
       GOOSE_REPO_ROOT: /app/server/data/repos
+      GOOSE_HOME: /app/server/data/goose-runtime
+      GOOSE_PRESERVE_HOME: "0"
+      XDG_CONFIG_HOME: /app/server/data/goose-runtime/.config
+      XDG_CACHE_HOME: /app/server/data/goose-runtime/.cache
+      XDG_DATA_HOME: /app/server/data/goose-runtime/.local/share
+      XDG_STATE_HOME: /app/server/data/goose-runtime/.local/state
       GOOSE_ENABLE_SUBAGENTS: "0"
       GOOSE_SUBAGENTS_MAX: "1"
       GOOSE_MANAGER_REQUIRED: "0"
       GOOSE_ALLOW_MOCK_FALLBACK: "0"
     volumes:
+      - /home/infosys/.config/goose:/seed/goose/config:ro
+      - /home/infosys/.cache/goose:/seed/goose/cache:ro
+      - /home/infosys/.local/share/goose:/seed/goose/share:ro
+      - /home/infosys/.local/state/goose:/seed/goose/state:ro
       - factory_server_data:/app/server/data
     networks:
       - dokploy-network
