@@ -933,6 +933,14 @@ function inferGoosePhaseFromPayload(payload) {
   return kind;
 }
 
+function isToolEventPayload(payload) {
+  const event = payload && typeof payload === 'object' ? payload : {};
+  const kind = String(event.event || event.type || event.kind || '').trim().toLowerCase();
+  if (kind.includes('tool')) return true;
+  if (event.tool || event.tool_name) return true;
+  return false;
+}
+
 function sanitizeChunkFileRef(value) {
   const raw = String(value || '').trim().replace(/\\/g, '/');
   if (!raw) return '';
@@ -3224,6 +3232,15 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     let currentPhase = 'starting';
     let phaseUpdatedAt = Date.now();
     const suppressToolSpam = toBoolEnv(process.env.GOOSE_SUPPRESS_TOOL_RESPONSE_LOG_SPAM, true);
+    const nonWritingGuardEnabled = toBoolEnv(process.env.GOOSE_NON_WRITING_TOOL_LOOP_GUARD, true);
+    const nonWritingToolEventLimit = parsePositiveInt(process.env.GOOSE_NON_WRITING_TOOL_EVENT_LIMIT, 6);
+    const nonWritingMinElapsedMs = parsePositiveInt(process.env.GOOSE_NON_WRITING_LOOP_MIN_ELAPSED_MS, 45000);
+    const nonWritingCheckCooldownMs = parsePositiveInt(process.env.GOOSE_NON_WRITING_LOOP_CHECK_COOLDOWN_MS, 8000);
+    let nonWritingToolEvents = 0;
+    let nonWritingCheckInFlight = false;
+    let nonWritingLastCheckAt = 0;
+    let nonWritingLoopAborted = false;
+    let nonWritingWriteDetected = false;
     const setPhase = (phase) => {
       const next = String(phase || '').trim();
       if (!next || next === currentPhase) return;
@@ -3236,6 +3253,42 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     const bridgeAbortController = new AbortController();
     const runForBridge = activeRuns.get(task.id) || {};
     activeRuns.set(task.id, { ...runForBridge, runId, bridgeAbortController });
+    const maybeAbortForNonWritingLoop = () => {
+      if (!nonWritingGuardEnabled || nonWritingWriteDetected || nonWritingLoopAborted) return;
+      if (nonWritingToolEvents < nonWritingToolEventLimit) return;
+      const now = Date.now();
+      if (now - startedAt < nonWritingMinElapsedMs) return;
+      if (nonWritingCheckInFlight || now - nonWritingLastCheckAt < nonWritingCheckCooldownMs) return;
+      nonWritingLastCheckAt = now;
+      nonWritingCheckInFlight = true;
+      void detectMeaningfulTaskChanges({
+        workingDirectory,
+        env: authReadyEnv,
+        baseBranch: String(task.baseBranch || process.env.GOOSE_TEST_BRANCH || 'test').trim(),
+        runStartHead
+      })
+        .then((changes) => {
+          if (!isCurrentRun()) return;
+          if (changes.meaningful.length > 0) {
+            nonWritingWriteDetected = true;
+            nonWritingToolEvents = 0;
+            return;
+          }
+          if (!nonWritingLoopAborted && nonWritingToolEvents >= nonWritingToolEventLimit) {
+            nonWritingLoopAborted = true;
+            emitLine(
+              broadcast,
+              task.id,
+              `${primaryName}> no file edits detected after ${nonWritingToolEvents} tool events; aborting run to prevent non-writing loop.`
+            );
+            bridgeAbortController.abort();
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          nonWritingCheckInFlight = false;
+        });
+    };
     setPhase('waiting_for_events');
     const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 900);
     const activityPulse = setInterval(() => {
@@ -3268,6 +3321,10 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
         }
         eventSeq += 1;
         setPhase(inferGoosePhaseFromPayload(parsed));
+        if (isToolEventPayload(parsed)) {
+          nonWritingToolEvents += 1;
+          maybeAbortForNonWritingLoop();
+        }
         const assistantLines = extractAssistantReplyLines(parsed);
         const event = formatGooseStreamEvent(parsed);
         const deepFallbackLines = Array.from(new Set(collectTextLinesDeep(parsed).filter(Boolean)))
@@ -3315,6 +3372,14 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     setPhase(bridgeResult.code === 0 ? 'completed' : 'failed');
     emitLine(broadcast, task.id, `${primaryName}> process exited code=${bridgeResult.code} after ${durationSec}s`);
     if (bridgeResult.code !== 0) {
+      if (nonWritingLoopAborted) {
+        updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
+        clearInterval(primaryThinkingTicker);
+        clearInterval(leaseHeartbeat);
+        releaseLease('failed');
+        clearRunIfCurrent();
+        return;
+      }
       if (isStopRequested()) {
         clearInterval(primaryThinkingTicker);
         clearInterval(leaseHeartbeat);
@@ -3362,6 +3427,15 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   let currentPhase = 'starting';
   let phaseUpdatedAt = Date.now();
   const suppressToolSpam = toBoolEnv(process.env.GOOSE_SUPPRESS_TOOL_RESPONSE_LOG_SPAM, true);
+  const nonWritingGuardEnabled = toBoolEnv(process.env.GOOSE_NON_WRITING_TOOL_LOOP_GUARD, true);
+  const nonWritingToolEventLimit = parsePositiveInt(process.env.GOOSE_NON_WRITING_TOOL_EVENT_LIMIT, 6);
+  const nonWritingMinElapsedMs = parsePositiveInt(process.env.GOOSE_NON_WRITING_LOOP_MIN_ELAPSED_MS, 45000);
+  const nonWritingCheckCooldownMs = parsePositiveInt(process.env.GOOSE_NON_WRITING_LOOP_CHECK_COOLDOWN_MS, 8000);
+  let nonWritingToolEvents = 0;
+  let nonWritingCheckInFlight = false;
+  let nonWritingLastCheckAt = 0;
+  let nonWritingWriteDetected = false;
+  let nonWritingStopRequested = false;
   const repetitiveToolResponseLimit = parsePositiveInt(process.env.GOOSE_REPETITIVE_TOOL_RESPONSE_LIMIT, 3);
   let repeatedToolResponseCount = 0;
   let lastToolResponseFingerprint = '';
@@ -3393,6 +3467,40 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   }, timeoutMs);
 
   const startedAt = Date.now();
+  const maybeAbortForNonWritingLoop = () => {
+    if (!nonWritingGuardEnabled || nonWritingWriteDetected || nonWritingStopRequested) return;
+    if (nonWritingToolEvents < nonWritingToolEventLimit) return;
+    const now = Date.now();
+    if (now - startedAt < nonWritingMinElapsedMs) return;
+    if (nonWritingCheckInFlight || now - nonWritingLastCheckAt < nonWritingCheckCooldownMs) return;
+    nonWritingLastCheckAt = now;
+    nonWritingCheckInFlight = true;
+    void detectMeaningfulTaskChanges({
+      workingDirectory,
+      env: authReadyEnv,
+      baseBranch: String(task.baseBranch || process.env.GOOSE_TEST_BRANCH || 'test').trim(),
+      runStartHead
+    })
+      .then((changes) => {
+        if (!isCurrentRun()) return;
+        if (changes.meaningful.length > 0) {
+          nonWritingWriteDetected = true;
+          nonWritingToolEvents = 0;
+          return;
+        }
+        if (!nonWritingStopRequested && nonWritingToolEvents >= nonWritingToolEventLimit) {
+          nonWritingStopRequested = true;
+          terminateProcess(
+            `${primaryName}> no file edits detected after ${nonWritingToolEvents} tool events; terminating non-writing loop.`,
+            'no_write_progress'
+          );
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        nonWritingCheckInFlight = false;
+      });
+  };
   let lastOutputAt = startedAt;
   const heartbeat = heartbeatEnabled
     ? setInterval(() => {
@@ -3445,6 +3553,10 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     }
     eventSeq += 1;
     setPhase(inferGoosePhaseFromPayload(parsed));
+    if (isToolEventPayload(parsed)) {
+      nonWritingToolEvents += 1;
+      maybeAbortForNonWritingLoop();
+    }
     const assistantLines = extractAssistantReplyLines(parsed);
     const event = formatGooseStreamEvent(parsed);
     const deepFallbackLines = Array.from(new Set(collectTextLinesDeep(parsed).filter(Boolean)))
