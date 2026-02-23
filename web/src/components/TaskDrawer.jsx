@@ -42,6 +42,7 @@ export default function TaskDrawer({
   attachmentsByTask,
   onAssigneeChange,
   onRetryTask,
+  retryBusy = false,
   onBuildTest,
   onStopTask,
   onMoveToTrash,
@@ -138,10 +139,11 @@ export default function TaskDrawer({
                   {task.runtimeStatus === 'failed' ? (
                     <button
                       type="button"
+                      disabled={retryBusy}
                       onClick={() => onRetryTask?.(task.id)}
-                      className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700"
+                      className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Move To In Progress
+                      {retryBusy ? 'Starting...' : 'Move To In Progress'}
                     </button>
                   ) : null}
                   <button

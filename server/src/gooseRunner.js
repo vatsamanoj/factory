@@ -2637,12 +2637,14 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     return;
   }
   if (!leaseAttempt.acquired) {
-    const reason = leaseAttempt.reason === 'idempotent-replay' ? 'idempotent replay' : 'already running';
-    emitLine(
-      broadcast,
-      task.id,
-      `${primaryName}> execution lease not acquired (${reason}); active run=${leaseAttempt.lease?.runId || 'unknown'}.`
-    );
+    if (leaseAttempt.reason !== 'idempotent-replay') {
+      const reason = leaseAttempt.reason === 'idempotent-replay' ? 'idempotent replay' : 'already running';
+      emitLine(
+        broadcast,
+        task.id,
+        `${primaryName}> execution lease not acquired (${reason}); active run=${leaseAttempt.lease?.runId || 'unknown'}.`
+      );
+    }
     return;
   }
 

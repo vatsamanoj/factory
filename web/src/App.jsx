@@ -123,6 +123,10 @@ function isRunningRuntimeStatus(runtimeStatus) {
   return runtimeStatus === 'running' || runtimeStatus === 'build_running';
 }
 
+function isTerminalRuntimeStatus(runtimeStatus) {
+  return ['success', 'failed', 'build_failed', 'build_success'].includes(String(runtimeStatus || '').toLowerCase());
+}
+
 function isHeartbeatLogLine(line) {
   return /\bheartbeat\b/i.test(String(line || ''));
 }
@@ -185,6 +189,7 @@ export default function App() {
   const [bridgeDiagnostics, setBridgeDiagnostics] = useState(null);
   const [bridgeDiagnosticsError, setBridgeDiagnosticsError] = useState('');
   const [bridgeDiagnosticsBusy, setBridgeDiagnosticsBusy] = useState(false);
+  const [retryLockedTaskIds, setRetryLockedTaskIds] = useState({});
   const [branchOptionsByProject, setBranchOptionsByProject] = useState({});
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [theme, setTheme] = useState('default');
@@ -343,6 +348,23 @@ export default function App() {
     if (!latest) return;
     setSelectedTask((prev) => (prev && prev.id === latest.id ? latest : prev));
   }, [tasks, selectedTask?.id]);
+
+  useEffect(() => {
+    setRetryLockedTaskIds((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const [taskIdRaw, locked] of Object.entries(prev)) {
+        if (!locked) continue;
+        const taskId = Number(taskIdRaw);
+        const task = tasks.find((row) => row.id === taskId);
+        if (!task || isTerminalRuntimeStatus(getEffectiveRuntimeStatus(task))) {
+          delete next[taskIdRaw];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [tasks]);
 
   useEffect(() => {
     if (!selectedTask?.id) return;
@@ -565,9 +587,20 @@ export default function App() {
   }
 
   async function handleRetryTask(taskId) {
-    const { task } = await retryTask(taskId);
-    setTasks((prev) => prev.map((item) => (item.id === task.id ? task : item)));
-    setSelectedTask((prev) => (prev && prev.id === task.id ? task : prev));
+    if (retryLockedTaskIds[String(taskId)]) return;
+    setRetryLockedTaskIds((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const { task } = await retryTask(taskId);
+      setTasks((prev) => prev.map((item) => (item.id === task.id ? task : item)));
+      setSelectedTask((prev) => (prev && prev.id === task.id ? task : prev));
+    } catch (error) {
+      setRetryLockedTaskIds((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+      throw error;
+    }
   }
 
   async function handleRunBuildTest(taskId) {
@@ -1206,6 +1239,7 @@ export default function App() {
         attachmentsByTask={attachmentsByTask}
         onAssigneeChange={handleTaskAssigneeChange}
         onRetryTask={handleRetryTask}
+        retryBusy={Boolean(selectedTask && retryLockedTaskIds[String(selectedTask.id)])}
         onBuildTest={handleRunBuildTest}
         onStopTask={handleStopTask}
         onMoveToTrash={handleMoveTaskToTrash}

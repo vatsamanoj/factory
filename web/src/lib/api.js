@@ -14,6 +14,10 @@ function withProjectQuery(path, projectId) {
   return `${path}${sep}projectId=${encodeURIComponent(projectId)}`;
 }
 
+function newIdempotencyKey(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export async function getTasks(projectId) {
   const res = await fetch(withProjectQuery('/api/tasks', projectId));
   return parseApiResponse(res, 'Failed to fetch tasks');
@@ -38,7 +42,8 @@ export async function approveTask(taskId) {
 
 export async function retryTask(taskId) {
   const res = await fetch(`/api/tasks/${taskId}/retry`, {
-    method: 'POST'
+    method: 'POST',
+    headers: { 'x-idempotency-key': newIdempotencyKey(`task-${taskId}:retry`) }
   });
   return parseApiResponse(res, 'Failed to retry task');
 }
