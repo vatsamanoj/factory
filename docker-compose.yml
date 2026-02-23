@@ -15,6 +15,7 @@ services:
       GOOSE_ENABLE_SUBAGENTS: "0"
       GOOSE_SUBAGENTS_MAX: "1"
       GOOSE_MANAGER_REQUIRED: "0"
+      GOOSE_ALLOW_MOCK_FALLBACK: "0"
     volumes:
       - factory_server_data:/app/server/data
     networks:

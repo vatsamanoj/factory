@@ -10,7 +10,11 @@ RUN npm run build
 FROM node:22-alpine
 WORKDIR /app
 
-RUN apk add --no-cache nginx git bash ripgrep
+RUN apk add --no-cache nginx git bash ripgrep curl ca-certificates \
+  && update-ca-certificates \
+  && CONFIGURE=false sh -c "$(curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh)" \
+  && ln -sf /root/.local/bin/goose /usr/local/bin/goose \
+  && goose --version
 
 # Frontend assets
 COPY --from=builder /app/web/dist /usr/share/nginx/html
@@ -28,6 +32,7 @@ RUN chmod +x /start.sh && mkdir -p /app/server/data /run/nginx
 ENV PORT=8787
 ENV DASHBOARD_DB_PATH=/app/server/data/dashboard.db
 ENV GOOSE_CODE_INDEX_LANCEDB_DIR=/app/server/data/codeintel.lancedb
+ENV GOOSE_ALLOW_MOCK_FALLBACK=0
 
 EXPOSE 5173
 CMD ["/start.sh"]

@@ -486,6 +486,10 @@ function toBoolEnv(value, fallback = false) {
   return fallback;
 }
 
+function shouldAllowMockFallback() {
+  return toBoolEnv(process.env.GOOSE_ALLOW_MOCK_FALLBACK, false);
+}
+
 function withSmartCodeExecutionPrompt(prompt, mode = 'default') {
   const base = String(prompt || '').trim();
   if (!base) return base;
@@ -2386,6 +2390,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   }
 
   const gooseEnv = mergePluginEnv(buildGooseEnv(), plugins);
+  const allowMockFallback = shouldAllowMockFallback();
   const gooseProbe = await new Promise((resolve) => {
     const child = spawn('goose', ['--version'], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -2401,6 +2406,18 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
 
   if (!gooseProbe.ok) {
     const detail = gooseProbe.reason ? ` (${gooseProbe.reason.slice(0, 220)})` : '';
+    if (!allowMockFallback) {
+      emitLine(
+        broadcast,
+        task.id,
+        `${primaryName}> Goose CLI probe failed${detail}; strict mode active (GOOSE_ALLOW_MOCK_FALLBACK=0), marking task failed.`
+      );
+      updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
+      clearRunIfCurrent();
+      clearInterval(leaseHeartbeat);
+      releaseLease('failed');
+      return;
+    }
     emitLine(broadcast, task.id, `${primaryName}> Goose CLI probe failed${detail}; switching to mock runner.`);
     await runMockGoose(task, broadcast);
     clearRunIfCurrent();
@@ -2889,6 +2906,18 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     if (heartbeat) clearInterval(heartbeat);
     if (activityPulse) clearInterval(activityPulse);
     clearInterval(primaryThinkingTicker);
+    if (!allowMockFallback) {
+      emitLine(
+        broadcast,
+        task.id,
+        `${primaryName}> process spawn failed; strict mode active (GOOSE_ALLOW_MOCK_FALLBACK=0), marking task failed.`
+      );
+      updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
+      clearInterval(leaseHeartbeat);
+      releaseLease('failed');
+      clearRunIfCurrent();
+      return;
+    }
     emitLine(broadcast, task.id, `${primaryName}> process spawn failed, switching to mock runner.`);
     void runMockGoose(task, broadcast).finally(() => {
       clearInterval(leaseHeartbeat);
