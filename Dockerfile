@@ -12,7 +12,7 @@ WORKDIR /app
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    nginx git bash ripgrep ca-certificates curl bzip2 tar \
+    nginx git gh bash ripgrep ca-certificates curl bzip2 tar \
     libxcb1 libx11-6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libxrender1 libxi6 libxtst6 libnss3 libasound2 \
   && CONFIGURE=false bash -lc "$(curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh)" \
   && ln -sf /root/.local/bin/goose /usr/local/bin/goose \
