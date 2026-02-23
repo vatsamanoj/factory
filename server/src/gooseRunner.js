@@ -506,11 +506,12 @@ function resolveGooseBridgeConfig() {
   const singleUrl = String(process.env.GOOSE_BRIDGE_URL || '').trim().replace(/\/+$/, '');
   const listRaw = String(process.env.GOOSE_BRIDGE_URLS || '').trim();
   const runningInContainer = isRunningInContainer();
+  const forceLocalInContainer = toBoolEnv(process.env.GOOSE_LOCAL_IN_CONTAINER, false);
   const urls = []
     .concat(listRaw ? listRaw.split(',').map((item) => String(item || '').trim()) : [])
     .concat(singleUrl ? [singleUrl] : [])
     .concat(
-      runningInContainer
+      runningInContainer && !forceLocalInContainer
         ? ['http://host.docker.internal:8788', 'http://172.17.0.1:8788', 'http://gateway.docker.internal:8788']
         : []
     )
@@ -2603,10 +2604,13 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   const gooseEnv = mergePluginEnv(buildGooseEnv(), plugins);
   const gooseBridge = resolveGooseBridgeConfig();
   const runningInContainer = isRunningInContainer();
-  const bridgeOnlyMode = runningInContainer;
-  const useBridge = bridgeOnlyMode || gooseBridge.enabled;
+  const forceLocalInContainer = toBoolEnv(process.env.GOOSE_LOCAL_IN_CONTAINER, false);
+  const bridgeOnlyMode = runningInContainer && !forceLocalInContainer;
+  const useBridge = !forceLocalInContainer && (bridgeOnlyMode || gooseBridge.enabled);
   if (bridgeOnlyMode) {
     emitLine(broadcast, task.id, `${primaryName}> runtime detected as container; bridge-only goose execution enabled.`);
+  } else if (runningInContainer && forceLocalInContainer) {
+    emitLine(broadcast, task.id, `${primaryName}> runtime detected as container; local Goose execution mode enabled.`);
   }
   if (bridgeOnlyMode && !gooseBridge.enabled) {
     emitLine(

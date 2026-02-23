@@ -11,7 +11,10 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends nginx git bash ripgrep ca-certificates \
+  && apt-get install -y --no-install-recommends nginx git bash ripgrep ca-certificates curl bzip2 tar \
+  && CONFIGURE=false bash -lc "$(curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh)" \
+  && ln -sf /root/.local/bin/goose /usr/local/bin/goose \
+  && goose --version \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /etc/nginx/sites-enabled/default \
   && mkdir -p /run/nginx
