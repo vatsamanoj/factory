@@ -6,10 +6,28 @@ RUN npm install
 COPY web/ ./
 RUN npm run build
 
-# Stage 2: Serve frontend with API/WebSocket reverse proxy
-FROM nginx:1.27-alpine
-WORKDIR /usr/share/nginx/html
-COPY --from=builder /app/web/dist ./
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Stage 2: Run API + Nginx (single container deployment friendly)
+FROM node:20-alpine
+WORKDIR /app
+
+RUN apk add --no-cache nginx
+
+# Frontend assets
+COPY --from=builder /app/web/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/http.d/default.conf
+
+# Backend app
+COPY server/package*.json /app/server/
+RUN npm --prefix /app/server install --omit=dev
+COPY server/src /app/server/src
+COPY server/schemas /app/server/schemas
+
+COPY docker/start.sh /start.sh
+RUN chmod +x /start.sh && mkdir -p /app/server/data /run/nginx
+
+ENV PORT=8787
+ENV DASHBOARD_DB_PATH=/app/server/data/dashboard.db
+ENV GOOSE_CODE_INDEX_LANCEDB_DIR=/app/server/data/codeintel.lancedb
+
 EXPOSE 5173
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/start.sh"]

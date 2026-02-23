@@ -7,25 +7,12 @@ services:
     restart: always
     ports:
       - "5173:5173"
-    depends_on:
-      - api
-    networks:
-      - dokploy-network
-
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    container_name: factory-api
-    restart: always
     environment:
-      - PORT=8787
-      - DASHBOARD_DB_PATH=/app/server/data/dashboard.db
-      - GOOSE_CODE_INDEX_LANCEDB_DIR=/app/server/data/codeintel.lancedb
+      PORT: 8787
+      DASHBOARD_DB_PATH: /app/server/data/dashboard.db
+      GOOSE_CODE_INDEX_LANCEDB_DIR: /app/server/data/codeintel.lancedb
     volumes:
       - ./server/data:/app/server/data
-    expose:
-      - "8787"
     networks:
       - dokploy-network
 
