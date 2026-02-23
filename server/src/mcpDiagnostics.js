@@ -82,14 +82,16 @@ export function recommendedPlugins() {
   const memoryPath = path.join(binDir, 'mcp-server-memory');
   const everythingPath = path.join(binDir, 'mcp-server-everything');
   const githubPath = path.join(binDir, 'mcp-server-github');
-
-  return [
+  const plugins = [
     { name: 'Filesystem MCP', type: 'mcp', schemaId: 'filesystem_mcp', url: `${fsPath} ${projectRoot}` },
     { name: 'Memory MCP', type: 'mcp', schemaId: 'memory_mcp', url: `${memoryPath}` },
     { name: 'Everything MCP', type: 'mcp', url: `${everythingPath} stdio` },
-    { name: 'GitHub MCP', type: 'mcp', schemaId: 'github_mcp', url: `${githubPath}` },
     { name: 'Codex Agent', type: 'agent', schemaId: 'codex_agent', url: 'openai:gpt-5-codex' }
   ];
+  if (fs.existsSync(githubPath)) {
+    plugins.splice(3, 0, { name: 'GitHub MCP', type: 'mcp', schemaId: 'github_mcp', url: `${githubPath}` });
+  }
+  return plugins;
 }
 
 export async function runMcpDiagnostics() {

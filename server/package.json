@@ -11,7 +11,6 @@
     "@lancedb/lancedb": "^0.19.1",
     "@modelcontextprotocol/server-everything": "^2026.1.26",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
-    "@modelcontextprotocol/server-github": "^2025.4.8",
     "@modelcontextprotocol/server-memory": "^2026.1.26",
     "cors": "^2.8.5",
     "express": "^4.21.2",
