@@ -43,6 +43,7 @@ export default function TaskDrawer({
   onAssigneeChange,
   onRetryTask,
   onBuildTest,
+  onStopTask,
   onMoveToTrash,
   onRefreshAttachments,
   onClose
@@ -89,6 +90,7 @@ export default function TaskDrawer({
     }
   }
   const attachmentRows = task ? attachmentsByTask?.[task.id] || [] : [];
+  const isRunning = task?.runtimeStatus === 'running';
 
   return (
     <AnimatePresence>
@@ -149,6 +151,14 @@ export default function TaskDrawer({
                     className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Build Test
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!isRunning}
+                    onClick={() => onStopTask?.(task.id)}
+                    className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Stop Run
                   </button>
                   <button
                     type="button"

@@ -30,7 +30,7 @@ import {
   updateTask
 } from './db.js';
 import { hydratePrompt } from './contextHydrator.js';
-import { runGooseExecution } from './gooseRunner.js';
+import { runGooseExecution, stopGooseExecution } from './gooseRunner.js';
 import {
   ensureProjectRepoReady,
   getProjectRepoStatus,
@@ -420,6 +420,26 @@ app.post('/api/tasks/:taskId/retry', (req, res) => {
   }
 
   res.json({ task: next });
+});
+
+app.post('/api/tasks/:taskId/stop', (req, res) => {
+  const taskId = Number(req.params.taskId);
+  if (!Number.isFinite(taskId)) return res.status(400).json({ error: 'invalid task id' });
+  const task = getTask(taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const stopped = stopGooseExecution(taskId, { broadcast });
+  if (!stopped.stopped) {
+    if (stopped.reason === 'not-running') {
+      return res.status(409).json({ error: 'Task is not running' });
+    }
+    return res.status(400).json({ error: `Unable to stop task (${stopped.reason})` });
+  }
+  const next = updateTask(taskId, { status: 'todo', runtimeStatus: 'waiting' });
+  const line = '[runner] manual stop requested by user; task moved to todo/waiting.';
+  appendTaskLog(taskId, line);
+  broadcast({ type: 'task_log', taskId, line });
+  broadcast({ type: 'task_status', task: next });
+  res.json({ task: next, stopped: true });
 });
 
 app.post('/api/tasks/:taskId/build-test', async (req, res) => {

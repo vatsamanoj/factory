@@ -43,6 +43,13 @@ export async function retryTask(taskId) {
   return parseApiResponse(res, 'Failed to retry task');
 }
 
+export async function stopTask(taskId) {
+  const res = await fetch(`/api/tasks/${taskId}/stop`, {
+    method: 'POST'
+  });
+  return parseApiResponse(res, 'Failed to stop task');
+}
+
 export async function runTaskBuildTest(taskId) {
   const res = await fetch(`/api/tasks/${taskId}/build-test`, {
     method: 'POST'

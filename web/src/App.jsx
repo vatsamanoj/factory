@@ -37,6 +37,7 @@ import {
   getTasks,
   getViews,
   retryTask,
+  stopTask,
   runTaskBuildTest,
   updatePage,
   updateProject,
@@ -538,6 +539,15 @@ export default function App() {
 
   async function handleRunBuildTest(taskId) {
     const { task } = await runTaskBuildTest(taskId);
+    setTasks((prev) => prev.map((item) => (item.id === task.id ? task : item)));
+    setSelectedTask((prev) => (prev && prev.id === task.id ? task : prev));
+    const logData = await getTaskLogs(taskId, 20000);
+    const lines = (logData.logs || []).map((row) => row.line);
+    setLogsByTask((prev) => ({ ...prev, [taskId]: lines }));
+  }
+
+  async function handleStopTask(taskId) {
+    const { task } = await stopTask(taskId);
     setTasks((prev) => prev.map((item) => (item.id === task.id ? task : item)));
     setSelectedTask((prev) => (prev && prev.id === task.id ? task : prev));
     const logData = await getTaskLogs(taskId, 20000);
@@ -1164,6 +1174,7 @@ export default function App() {
         onAssigneeChange={handleTaskAssigneeChange}
         onRetryTask={handleRetryTask}
         onBuildTest={handleRunBuildTest}
+        onStopTask={handleStopTask}
         onMoveToTrash={handleMoveTaskToTrash}
         onRefreshAttachments={handleRefreshAttachments}
         onClose={() => setSelectedTask(null)}

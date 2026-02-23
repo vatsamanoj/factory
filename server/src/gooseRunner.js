@@ -154,6 +154,17 @@ function collectTextLinesDeep(value, depth = 0, lines = []) {
   return lines;
 }
 
+function isNoisyToolResponseText(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (lower.includes('"type":"toolresponse"')) return true;
+  if (lower.includes('"toolresult"') && lower.includes('"status":"success"')) return true;
+  if (lower.includes('code executed successfully:')) return true;
+  if (lower.includes('# return value') && (lower.includes('# stdout') || lower.includes('# stderr'))) return true;
+  return false;
+}
+
 function extractAssistantReplyLines(payload) {
   const event = payload && typeof payload === 'object' ? payload : {};
   const kind = getEventKind(event);
@@ -187,12 +198,13 @@ function extractAssistantReplyLines(payload) {
       .filter((line) => !/^(assistant|user|system|tool|message|response|output)$/i.test(line))
       .slice(0, looksLikeAssistantEvent ? 80 : 24);
     if (!deepLines.length) return [];
-    return deepLines;
+    return deepLines.filter((line) => !isNoisyToolResponseText(line));
   }
   return compact
     .split('\n')
     .map((line) => line.replace(/\r$/, ''))
-    .filter((line) => line.length > 0);
+    .filter((line) => line.length > 0)
+    .filter((line) => !isNoisyToolResponseText(line));
 }
 
 function formatGooseStreamEvent(payload) {
@@ -606,6 +618,7 @@ async function runGooseThroughBridge({
   env,
   timeoutMs,
   noOutputTimeoutMs,
+  signal,
   onStdoutLine,
   onStderrLine
 }) {
@@ -620,6 +633,8 @@ async function runGooseThroughBridge({
   for (let attempt = 1; attempt <= connectAttempts; attempt += 1) {
     for (const url of urls) {
       const controller = new AbortController();
+      const abortWithExternal = () => controller.abort();
+      if (signal) signal.addEventListener('abort', abortWithExternal, { once: true });
       const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -646,7 +661,9 @@ async function runGooseThroughBridge({
       } catch (error) {
         clearTimeout(timer);
         openReason = `${url}: ${String(error?.name === 'AbortError' ? `bridge connect timeout ${fetchTimeoutMs}ms` : error?.message || error)}`;
+        if (signal?.aborted) openReason = `${url}: bridge run aborted`;
       }
+      if (signal) signal.removeEventListener('abort', abortWithExternal);
     }
     if (response?.ok) break;
     // eslint-disable-next-line no-await-in-loop
@@ -662,6 +679,11 @@ async function runGooseThroughBridge({
   let reason = '';
 
   while (true) {
+    if (signal?.aborted) {
+      closeCode = 130;
+      reason = reason || 'bridge run aborted';
+      break;
+    }
     // eslint-disable-next-line no-await-in-loop
     const { value, done } = await reader.read();
     if (done) break;
@@ -712,6 +734,40 @@ async function runGooseThroughBridge({
     reason = 'bridge stream ended without explicit close reason';
   }
   return { code: closeCode, reason };
+}
+
+export function stopGooseExecution(taskId, { broadcast } = {}) {
+  const id = Number(taskId);
+  if (!Number.isFinite(id)) return { stopped: false, reason: 'invalid-task-id' };
+  const run = activeRuns.get(id);
+  if (!run) return { stopped: false, reason: 'not-running' };
+  const next = { ...run, stopRequested: true };
+  activeRuns.set(id, next);
+  const actor = 'Rajiv Gupta (Boss)';
+  if (broadcast) emitLine(broadcast, id, `${actor}> manual stop requested by user; terminating active execution.`);
+  if (next.bridgeAbortController && !next.bridgeAbortController.signal.aborted) {
+    try {
+      next.bridgeAbortController.abort();
+    } catch {
+      // ignore bridge abort errors
+    }
+  }
+  if (next.child && !next.child.killed) {
+    try {
+      next.child.kill('SIGTERM');
+      setTimeout(() => {
+        try {
+          if (!next.child.killed) next.child.kill('SIGKILL');
+        } catch {
+          // ignore forced kill errors
+        }
+      }, 4000);
+    } catch {
+      // ignore kill errors
+    }
+  }
+  activeRuns.delete(id);
+  return { stopped: true, runId: String(run.runId || '') };
 }
 
 function withSmartCodeExecutionPrompt(prompt, mode = 'default') {
@@ -998,6 +1054,20 @@ function runSpawn(command, args, options = {}) {
     child.on('error', reject);
     child.on('close', (code) => resolve({ code, out, err }));
   });
+}
+
+async function ensureGitSafeDirectory(workingDirectory, env, { broadcast, taskId } = {}) {
+  const repoPath = String(workingDirectory || '').trim();
+  if (!repoPath) return;
+  const res = await runSpawn('git', ['config', '--global', '--add', 'safe.directory', repoPath], { cwd: repoPath, env });
+  if (res.code !== 0 && broadcast && Number.isFinite(Number(taskId))) {
+    const reason = String(res.err || res.out || '').trim().slice(0, 220);
+    emitLine(
+      broadcast,
+      taskId,
+      `repo> unable to register safe.directory for ${repoPath}: ${reason || `exit=${res.code}`}`
+    );
+  }
 }
 
 async function runValidationGate({ task, workingDirectory, env, broadcast }) {
@@ -2708,7 +2778,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   emitLine(broadcast, task.id, `${primaryName}> cwd: ${workingDirectory}`);
   emitLine(broadcast, task.id, `${primaryName}> git mode: Goose-owned workflow (fetch/pull/commit/push/PR)`);
   emitLine(broadcast, task.id, `${primaryName}> plugin extensions: ${extensionArgs.length ? 'enabled' : 'none'}`);
-  const verboseStream = toBoolEnv(process.env.GOOSE_VERBOSE_STREAM, true);
+  const verboseStream = toBoolEnv(process.env.GOOSE_VERBOSE_STREAM, false);
   const heartbeatEnabled = true;
   const heartbeatMs = parsePositiveInt(process.env.GOOSE_HEARTBEAT_MS, 700);
   const activityPulseEnabled = true;
@@ -2761,6 +2831,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   if (projectToken && !env.GITHUB_PERSONAL_ACCESS_TOKEN) env.GITHUB_PERSONAL_ACCESS_TOKEN = projectToken;
   if (projectToken && !env.GITHUB_TOKEN) env.GITHUB_TOKEN = projectToken;
   const authReadyEnv = injectGitHubAuthForGit(env, projectToken);
+  await ensureGitSafeDirectory(workingDirectory, authReadyEnv, { broadcast, taskId: task.id });
   emitLine(broadcast, task.id, `repo> git https auth injected: ${projectToken ? 'yes' : 'no'}`);
   let runStartHead = '';
   const startHeadRes = await runSpawn('git', ['-C', workingDirectory, 'rev-parse', 'HEAD'], { cwd: workingDirectory, env: authReadyEnv });
@@ -2807,10 +2878,13 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     if (changes.meaningful.length) {
       emitLine(broadcast, task.id, `${primaryName}> meaningful changes: ${changes.meaningful.join(', ')}`);
     }
-    if (requireTaskChanges && !runStartHead) {
-      emitLine(broadcast, task.id, `${primaryName}> missing run-start HEAD; refusing no-op success path.`);
+    if (requireTaskChanges && !runStartHead && changes.meaningful.length === 0) {
+      emitLine(broadcast, task.id, `${primaryName}> missing run-start HEAD and no meaningful diff; refusing no-op success path.`);
       updateTaskStatusIfCurrent({ status: 'review', runtimeStatus: 'failed' });
       return;
+    }
+    if (requireTaskChanges && !runStartHead && changes.meaningful.length > 0) {
+      emitLine(broadcast, task.id, `${primaryName}> run-start HEAD unavailable; continuing because meaningful task changes were detected.`);
     }
     if (requireTaskChanges && changes.meaningful.length === 0) {
       emitLine(
@@ -3054,6 +3128,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     let eventSeq = 0;
     let currentPhase = 'starting';
     let phaseUpdatedAt = Date.now();
+    const suppressToolSpam = toBoolEnv(process.env.GOOSE_SUPPRESS_TOOL_RESPONSE_LOG_SPAM, true);
     const setPhase = (phase) => {
       const next = String(phase || '').trim();
       if (!next || next === currentPhase) return;
@@ -3063,6 +3138,9 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     };
     const startedAt = Date.now();
     const outputLines = [];
+    const bridgeAbortController = new AbortController();
+    const runForBridge = activeRuns.get(task.id) || {};
+    activeRuns.set(task.id, { ...runForBridge, runId, bridgeAbortController });
     setPhase('waiting_for_events');
     const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 900);
     const activityPulse = setInterval(() => {
@@ -3076,7 +3154,9 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
       env: authReadyEnv,
       timeoutMs,
       noOutputTimeoutMs,
+      signal: bridgeAbortController.signal,
       onStdoutLine: (line) => {
+        if (!isCurrentRun()) return;
         const parsed = parseJsonLine(line);
         if (!parsed) {
           outputLines.push(line);
@@ -3096,14 +3176,22 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
           ? assistantLines
           : event.approvalText.map((text) => String(text || '').trim()).filter(Boolean).slice(0, 80);
         const finalResponseLines = responseLines.length ? responseLines : deepFallbackLines;
-        for (const item of finalResponseLines) {
+        const nonSpamResponseLines = suppressToolSpam
+          ? finalResponseLines.filter((item) => !isNoisyToolResponseText(item))
+          : finalResponseLines;
+        const nonSpamApprovalLines = suppressToolSpam
+          ? event.approvalText.filter((item) => !isNoisyToolResponseText(item))
+          : event.approvalText;
+        const nonSpamLogLines = suppressToolSpam ? event.logLines.filter((item) => !isNoisyToolResponseText(item)) : event.logLines;
+        for (const item of nonSpamResponseLines) {
           emitConversation({ broadcast, taskId: task.id, from: primaryName, to: `${BOSS_NAME} (Boss)`, text: item });
         }
-        for (const text of finalResponseLines) outputLines.push(text);
-        for (const text of event.approvalText) outputLines.push(text);
-        for (const rendered of event.logLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
+        for (const text of nonSpamResponseLines) outputLines.push(text);
+        for (const text of nonSpamApprovalLines) outputLines.push(text);
+        for (const rendered of nonSpamLogLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
       },
       onStderrLine: (line) => {
+        if (!isCurrentRun()) return;
         outputLines.push(`stderr> ${line}`);
         emitLine(broadcast, task.id, `stderr> ${line}`);
       }
@@ -3153,6 +3241,12 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   let eventSeq = 0;
   let currentPhase = 'starting';
   let phaseUpdatedAt = Date.now();
+  const suppressToolSpam = toBoolEnv(process.env.GOOSE_SUPPRESS_TOOL_RESPONSE_LOG_SPAM, true);
+  const repetitiveToolResponseLimit = parsePositiveInt(process.env.GOOSE_REPETITIVE_TOOL_RESPONSE_LIMIT, 3);
+  let repeatedToolResponseCount = 0;
+  let lastToolResponseFingerprint = '';
+  let earlySuccessRequested = false;
+  let earlySuccessCheckInFlight = false;
   const setPhase = (phase) => {
     const next = String(phase || '').trim();
     if (!next || next === currentPhase) return;
@@ -3165,6 +3259,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     terminating = true;
     if (reasonFlag === 'timeout') timedOut = true;
     if (reasonFlag === 'stalled') stalled = true;
+    if (reasonFlag === 'early_success') earlySuccessRequested = true;
     emitLine(broadcast, task.id, reasonLine);
     child.kill('SIGTERM');
     forceKillTimer = setTimeout(() => {
@@ -3227,15 +3322,66 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
       ? assistantLines
       : event.approvalText.map((text) => String(text || '').trim()).filter(Boolean).slice(0, 80);
     const finalResponseLines = responseLines.length ? responseLines : deepFallbackLines;
-    for (const item of finalResponseLines) {
+    const nonSpamResponseLines = suppressToolSpam
+      ? finalResponseLines.filter((item) => !isNoisyToolResponseText(item))
+      : finalResponseLines;
+    const nonSpamApprovalLines = suppressToolSpam
+      ? event.approvalText.filter((item) => !isNoisyToolResponseText(item))
+      : event.approvalText;
+    const nonSpamLogLines = suppressToolSpam ? event.logLines.filter((item) => !isNoisyToolResponseText(item)) : event.logLines;
+
+    const toolNoiseBlob = `${finalResponseLines.join('\n')}\n${event.approvalText.join('\n')}`.trim();
+    if (suppressToolSpam && isNoisyToolResponseText(toolNoiseBlob)) {
+      const fingerprint = toolNoiseBlob.slice(0, 500);
+      if (fingerprint && fingerprint === lastToolResponseFingerprint) {
+        repeatedToolResponseCount += 1;
+      } else {
+        lastToolResponseFingerprint = fingerprint;
+        repeatedToolResponseCount = 1;
+      }
+      if (
+        repetitiveToolResponseLimit > 0 &&
+        repeatedToolResponseCount >= repetitiveToolResponseLimit &&
+        !earlySuccessRequested &&
+        !earlySuccessCheckInFlight
+      ) {
+        earlySuccessCheckInFlight = true;
+        void detectMeaningfulTaskChanges({
+          workingDirectory,
+          env: authReadyEnv,
+          baseBranch: String(task.baseBranch || process.env.GOOSE_TEST_BRANCH || 'test').trim(),
+          runStartHead
+        })
+          .then((changes) => {
+            if (!isCurrentRun()) return;
+            if (changes.meaningful.length > 0) {
+              terminateProcess(
+                `${primaryName}> repetitive successful tool responses detected after meaningful edits; stopping early to save tokens.`,
+                'early_success'
+              );
+            } else {
+              repeatedToolResponseCount = 0;
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            earlySuccessCheckInFlight = false;
+          });
+      }
+    } else {
+      repeatedToolResponseCount = 0;
+      lastToolResponseFingerprint = '';
+    }
+
+    for (const item of nonSpamResponseLines) {
       emitConversation({ broadcast, taskId: task.id, from: primaryName, to: `${BOSS_NAME} (Boss)`, text: item });
     }
-    for (const text of finalResponseLines) outputLines.push(text);
+    for (const text of nonSpamResponseLines) outputLines.push(text);
     if (verboseStream) {
       emitLine(broadcast, task.id, `${primaryName}(raw:${eventSeq})> ${compactJson(parsed)}`);
     }
-    for (const text of event.approvalText) outputLines.push(text);
-    for (const rendered of event.logLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
+    for (const text of nonSpamApprovalLines) outputLines.push(text);
+    for (const rendered of nonSpamLogLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
   });
   pumpStream(child.stderr, (line) => {
     lastOutputAt = Date.now();
@@ -3282,7 +3428,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     const durationSec = Math.floor((Date.now() - startedAt) / 1000);
     setPhase(code === 0 ? 'completed' : 'failed');
     emitLine(broadcast, task.id, `${primaryName}> process exited code=${code} after ${durationSec}s`);
-    if (code !== 0) {
+    if (code !== 0 && !earlySuccessRequested) {
       updateTaskStatusIfCurrent({
         status: timedOut || stalled ? 'todo' : 'triage',
         runtimeStatus: 'failed'
