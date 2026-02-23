@@ -2636,11 +2636,12 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
 
   if (!gooseProbe.ok) {
     const detail = gooseProbe.reason ? ` (${gooseProbe.reason.slice(0, 220)})` : '';
+    const candidates = (gooseBridge.urls || []).length ? ` candidates=[${gooseBridge.urls.join(', ')}]` : '';
     if (!allowMockFallback) {
       emitLine(
         broadcast,
         task.id,
-        `${primaryName}> Goose CLI probe failed${detail}; strict mode active (GOOSE_ALLOW_MOCK_FALLBACK=0), marking task failed.`
+        `${primaryName}> Goose CLI probe failed${detail}${candidates}; strict mode active (GOOSE_ALLOW_MOCK_FALLBACK=0), marking task failed.`
       );
       updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
       clearRunIfCurrent();
