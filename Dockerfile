@@ -7,18 +7,21 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Run API + Nginx (single container deployment friendly)
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 WORKDIR /app
 
-RUN apk add --no-cache nginx git bash ripgrep curl ca-certificates \
-  && update-ca-certificates \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends nginx git bash ripgrep curl ca-certificates bzip2 tar \
+  && rm -rf /var/lib/apt/lists/* \
   && CONFIGURE=false bash -lc "$(curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh)" \
   && ln -sf /root/.local/bin/goose /usr/local/bin/goose \
-  && goose --version
+  && goose --version \
+  && rm -f /etc/nginx/sites-enabled/default \
+  && mkdir -p /run/nginx
 
 # Frontend assets
 COPY --from=builder /app/web/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/http.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Backend app
 COPY server/package*.json /app/server/
@@ -27,7 +30,7 @@ COPY server/src /app/server/src
 COPY server/schemas /app/server/schemas
 
 COPY docker/start.sh /start.sh
-RUN chmod +x /start.sh && mkdir -p /app/server/data /run/nginx
+RUN chmod +x /start.sh && mkdir -p /app/server/data
 
 ENV PORT=8787
 ENV DASHBOARD_DB_PATH=/app/server/data/dashboard.db
