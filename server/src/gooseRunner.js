@@ -490,6 +490,133 @@ function shouldAllowMockFallback() {
   return toBoolEnv(process.env.GOOSE_ALLOW_MOCK_FALLBACK, false);
 }
 
+function resolveGooseBridgeConfig() {
+  const url = String(process.env.GOOSE_BRIDGE_URL || '').trim().replace(/\/+$/, '');
+  const token = String(process.env.GOOSE_BRIDGE_TOKEN || '').trim();
+  const mapRaw = String(process.env.GOOSE_BRIDGE_CWD_MAP || '').trim();
+  const maps = mapRaw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const idx = entry.indexOf(':');
+      if (idx <= 0) return null;
+      const from = entry.slice(0, idx).trim();
+      const to = entry.slice(idx + 1).trim();
+      if (!from || !to) return null;
+      return { from, to };
+    })
+    .filter(Boolean);
+  return { enabled: Boolean(url), url, token, maps };
+}
+
+function mapCwdForGooseBridge(cwd, bridgeConfig) {
+  const input = String(cwd || '').trim();
+  if (!input) return input;
+  const mappings = Array.isArray(bridgeConfig?.maps) ? bridgeConfig.maps : [];
+  for (const item of mappings) {
+    if (input === item.from) return item.to;
+    if (input.startsWith(`${item.from}/`)) return `${item.to}${input.slice(item.from.length)}`;
+  }
+  return input;
+}
+
+async function probeGooseBridge(bridgeConfig) {
+  const headers = { 'content-type': 'application/json' };
+  if (bridgeConfig.token) headers['x-goose-bridge-token'] = bridgeConfig.token;
+  const response = await fetch(`${bridgeConfig.url}/v1/probe`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({})
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return { ok: false, reason: String(payload?.error || `http_${response.status}`) };
+  }
+  return { ok: Boolean(payload?.ok), reason: String(payload?.reason || payload?.version || '') };
+}
+
+async function runGooseThroughBridge({
+  bridgeConfig,
+  args,
+  cwd,
+  env,
+  timeoutMs,
+  noOutputTimeoutMs,
+  onStdoutLine,
+  onStderrLine
+}) {
+  const headers = { 'content-type': 'application/json' };
+  if (bridgeConfig.token) headers['x-goose-bridge-token'] = bridgeConfig.token;
+  const response = await fetch(`${bridgeConfig.url}/v1/run-stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      args,
+      cwd,
+      env,
+      timeoutMs,
+      noOutputTimeoutMs
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    return { code: 1, reason: text || `http_${response.status}` };
+  }
+  if (!response.body) return { code: 1, reason: 'empty response body from bridge' };
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let closeCode = 1;
+  let reason = '';
+
+  while (true) {
+    // eslint-disable-next-line no-await-in-loop
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const raw = String(line || '').trim();
+      if (!raw) continue;
+      let event;
+      try {
+        event = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      const type = String(event?.type || '').trim().toLowerCase();
+      if (type === 'stdout') {
+        if (typeof event.line === 'string') onStdoutLine(event.line);
+      } else if (type === 'stderr') {
+        if (typeof event.line === 'string') onStderrLine(event.line);
+      } else if (type === 'close') {
+        closeCode = Number.isFinite(Number(event.code)) ? Number(event.code) : closeCode;
+        reason = String(event.reason || reason || '').trim();
+      } else if (type === 'error') {
+        reason = String(event.message || reason || '').trim();
+      }
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    try {
+      const event = JSON.parse(tail);
+      if (String(event?.type || '').trim().toLowerCase() === 'close') {
+        closeCode = Number.isFinite(Number(event.code)) ? Number(event.code) : closeCode;
+        reason = String(event.reason || reason || '').trim();
+      }
+    } catch {
+      // Ignore tail parse failure.
+    }
+  }
+
+  return { code: closeCode, reason };
+}
+
 function withSmartCodeExecutionPrompt(prompt, mode = 'default') {
   const base = String(prompt || '').trim();
   if (!base) return base;
@@ -2390,19 +2517,22 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   }
 
   const gooseEnv = mergePluginEnv(buildGooseEnv(), plugins);
+  const gooseBridge = resolveGooseBridgeConfig();
   const allowMockFallback = shouldAllowMockFallback();
-  const gooseProbe = await new Promise((resolve) => {
-    const child = spawn('goose', ['--version'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: gooseEnv
-    });
-    let err = '';
-    child.stderr.on('data', (chunk) => {
-      err += chunk.toString();
-    });
-    child.on('error', (error) => resolve({ ok: false, reason: String(error?.message || error) }));
-    child.on('close', (code) => resolve({ ok: code === 0, reason: err.trim() }));
-  });
+  const gooseProbe = gooseBridge.enabled
+    ? await probeGooseBridge(gooseBridge).catch((error) => ({ ok: false, reason: String(error?.message || error) }))
+    : await new Promise((resolve) => {
+        const child = spawn('goose', ['--version'], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: gooseEnv
+        });
+        let err = '';
+        child.stderr.on('data', (chunk) => {
+          err += chunk.toString();
+        });
+        child.on('error', (error) => resolve({ ok: false, reason: String(error?.message || error) }));
+        child.on('close', (code) => resolve({ ok: code === 0, reason: err.trim() }));
+      });
 
   if (!gooseProbe.ok) {
     const detail = gooseProbe.reason ? ` (${gooseProbe.reason.slice(0, 220)})` : '';
@@ -2788,6 +2918,97 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   const textIdx = logArgs.indexOf('--text');
   if (textIdx >= 0 && textIdx + 1 < logArgs.length) logArgs[textIdx + 1] = `<hydrated_prompt:${directPrompt.length} chars>`;
   emitLine(broadcast, task.id, `${primaryName}> command: goose ${logArgs.join(' ')}`);
+
+  if (gooseBridge.enabled) {
+    const timeoutMs = limits.timeoutMs;
+    const noOutputTimeoutMs = parsePositiveInt(process.env.GOOSE_NO_OUTPUT_TIMEOUT_MS, 120000);
+    const mappedCwd = mapCwdForGooseBridge(workingDirectory, gooseBridge);
+    if (mappedCwd !== workingDirectory) {
+      emitLine(broadcast, task.id, `${primaryName}> goose bridge cwd map: ${workingDirectory} -> ${mappedCwd}`);
+    }
+    emitLine(broadcast, task.id, `${primaryName}> goose bridge: ${gooseBridge.url}`);
+    let eventSeq = 0;
+    let currentPhase = 'starting';
+    let phaseUpdatedAt = Date.now();
+    const setPhase = (phase) => {
+      const next = String(phase || '').trim();
+      if (!next || next === currentPhase) return;
+      currentPhase = next;
+      phaseUpdatedAt = Date.now();
+      emitLine(broadcast, task.id, `${primaryName}> phase: ${next}`);
+    };
+    const startedAt = Date.now();
+    const outputLines = [];
+    setPhase('waiting_for_events');
+    const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 900);
+    const activityPulse = setInterval(() => {
+      const idleSec = Math.floor((Date.now() - phaseUpdatedAt) / 1000);
+      emitLine(broadcast, task.id, `${primaryName}> ${randomThinkingMessage()} phase=${currentPhase} events=${eventSeq} idle=${idleSec}s`);
+    }, activityPulseMs);
+    const bridgeResult = await runGooseThroughBridge({
+      bridgeConfig: gooseBridge,
+      args,
+      cwd: mappedCwd,
+      env: authReadyEnv,
+      timeoutMs,
+      noOutputTimeoutMs,
+      onStdoutLine: (line) => {
+        const parsed = parseJsonLine(line);
+        if (!parsed) {
+          outputLines.push(line);
+          emitLine(broadcast, task.id, `${primaryName}(stdout)> ${line}`);
+          if (String(line).includes('new session')) setPhase('session_started');
+          return;
+        }
+        eventSeq += 1;
+        setPhase(inferGoosePhaseFromPayload(parsed));
+        const assistantLines = extractAssistantReplyLines(parsed);
+        const event = formatGooseStreamEvent(parsed);
+        const deepFallbackLines = Array.from(new Set(collectTextLinesDeep(parsed).filter(Boolean)))
+          .map((text) => String(text || '').replace(/\r/g, '').trim())
+          .filter((text) => text.length > 1)
+          .slice(0, 24);
+        const responseLines = assistantLines.length
+          ? assistantLines
+          : event.approvalText.map((text) => String(text || '').trim()).filter(Boolean).slice(0, 80);
+        const finalResponseLines = responseLines.length ? responseLines : deepFallbackLines;
+        for (const item of finalResponseLines) {
+          emitConversation({ broadcast, taskId: task.id, from: primaryName, to: `${BOSS_NAME} (Boss)`, text: item });
+        }
+        for (const text of finalResponseLines) outputLines.push(text);
+        for (const text of event.approvalText) outputLines.push(text);
+        for (const rendered of event.logLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
+      },
+      onStderrLine: (line) => {
+        outputLines.push(`stderr> ${line}`);
+        emitLine(broadcast, task.id, `stderr> ${line}`);
+      }
+    }).catch((error) => ({ code: 1, reason: String(error?.message || error) }));
+
+    clearInterval(activityPulse);
+    const durationSec = Math.floor((Date.now() - startedAt) / 1000);
+    setPhase(bridgeResult.code === 0 ? 'completed' : 'failed');
+    emitLine(broadcast, task.id, `${primaryName}> process exited code=${bridgeResult.code} after ${durationSec}s`);
+    if (bridgeResult.code !== 0) {
+      const detail = bridgeResult.reason ? ` (${String(bridgeResult.reason).slice(0, 220)})` : '';
+      emitLine(broadcast, task.id, `${primaryName}> bridge run failed${detail}`);
+      updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
+      clearInterval(primaryThinkingTicker);
+      clearInterval(leaseHeartbeat);
+      releaseLease('failed');
+      clearRunIfCurrent();
+      return;
+    }
+    clearInterval(primaryThinkingTicker);
+    await completeSuccessfulRun(outputLines).catch((error) => {
+      emitLine(broadcast, task.id, `${primaryName}> completion pipeline failed: ${String(error?.message || error)}`);
+      updateTaskStatusIfCurrent({ status: 'review', runtimeStatus: 'failed' });
+    });
+    clearInterval(leaseHeartbeat);
+    releaseLease('completed');
+    clearRunIfCurrent();
+    return;
+  }
 
   const child = spawn('goose', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
