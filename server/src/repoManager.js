@@ -28,9 +28,27 @@ function sanitizeRepoUrl(repoUrl = '') {
   return String(repoUrl).trim().replace(/\/+$/, '');
 }
 
-function toAbsoluteRepoPath(repoPath = '') {
+function deriveRepoDirName(repoUrl = '', repoPath = '') {
+  const cleanPath = String(repoPath || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  const pathTail = cleanPath.split('/').filter(Boolean).pop() || '';
+  if (pathTail) return pathTail;
+  const cleanUrl = sanitizeRepoUrl(repoUrl).replace(/\.git$/i, '');
+  const urlTail = cleanUrl.split('/').filter(Boolean).pop() || '';
+  return urlTail || 'repo';
+}
+
+function toAbsoluteRepoPath(repoPath = '', repoUrl = '') {
   const clean = String(repoPath).trim();
   if (!clean) return '';
+  const repoRoot = String(process.env.GOOSE_REPO_ROOT || '').trim();
+  if (repoRoot) {
+    const normalizedRoot = path.resolve(repoRoot);
+    if (path.isAbsolute(clean)) {
+      const resolved = path.resolve(clean);
+      if (resolved.startsWith(normalizedRoot + path.sep) || resolved === normalizedRoot) return resolved;
+    }
+    return path.join(normalizedRoot, deriveRepoDirName(repoUrl, clean));
+  }
   if (path.isAbsolute(clean)) return clean;
   return path.resolve(process.cwd(), clean);
 }
@@ -82,7 +100,7 @@ export function validateProjectRepoConfig(input = {}) {
 
 export async function verifyRepoConnectivity(project) {
   const repoUrl = sanitizeRepoUrl(project?.repoUrl);
-  const repoPath = toAbsoluteRepoPath(project?.repoPath);
+  const repoPath = toAbsoluteRepoPath(project?.repoPath, repoUrl);
   const githubToken = String(project?.githubToken || '').trim();
   const defaultBranch = String(project?.defaultBranch || 'main').trim() || 'main';
 
@@ -131,7 +149,7 @@ export async function listProjectBranches(project) {
 
 export async function ensureProjectRepoReady(project, onLog, options = {}) {
   const repoUrl = sanitizeRepoUrl(project?.repoUrl);
-  const repoPath = toAbsoluteRepoPath(project?.repoPath);
+  const repoPath = toAbsoluteRepoPath(project?.repoPath, repoUrl);
   const githubToken = String(project?.githubToken || '').trim();
   const defaultBranch = String(project?.defaultBranch || 'main').trim() || 'main';
   const preferredBranch = String(options?.preferredBranch || '').trim();
@@ -350,7 +368,7 @@ export async function autoCreatePullRequest(repo, task, onLog, targetBranch) {
 }
 
 export async function getProjectRepoStatus(project) {
-  const repoPath = toAbsoluteRepoPath(project?.repoPath);
+  const repoPath = toAbsoluteRepoPath(project?.repoPath, project?.repoUrl);
   const repoUrl = sanitizeRepoUrl(project?.repoUrl);
   const defaultBranch = String(project?.defaultBranch || 'main').trim() || 'main';
   if (!repoPath || !repoUrl) {
@@ -414,7 +432,7 @@ export async function getProjectRepoStatus(project) {
 }
 
 export function readTaskAttachments(project, task) {
-  const repoPath = toAbsoluteRepoPath(project?.repoPath);
+  const repoPath = toAbsoluteRepoPath(project?.repoPath, project?.repoUrl);
   const files = Array.isArray(task?.refinementFiles) ? task.refinementFiles : [];
   if (!repoPath || !files.length) return [];
   return files
