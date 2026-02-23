@@ -83,6 +83,23 @@ function isLikelyFailureLine(value) {
   return /(error|failed|failure|exception|traceback|enoent|econn|timeout|timed out|stderr>)/i.test(text);
 }
 
+function isImplementationProgressLine(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes('event:tool') ||
+    text.includes('developer.texteditor') ||
+    text.includes('developer.shell') ||
+    text.includes('apply_patch') ||
+    text.includes('write_file') ||
+    text.includes('edit file') ||
+    text.includes('modified') ||
+    text.includes('changed files') ||
+    text.includes('running code execution tool') ||
+    text.includes('tool step completed')
+  );
+}
+
 function isBoilerplateAssistantLine(value) {
   const text = String(value || '').trim();
   if (!text) return true;
@@ -3283,7 +3300,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
           ? nonSpamApprovalLines.filter((item) => isMeaningfulAssistantLine(item) || isLikelyFailureLine(item))
           : nonSpamApprovalLines;
         const meaningfulEventLogLines = meaningfulLogsOnly
-          ? nonSpamLogLines.filter((item) => isLikelyFailureLine(item))
+          ? nonSpamLogLines.filter((item) => isLikelyFailureLine(item) || isImplementationProgressLine(item))
           : nonSpamLogLines;
         for (const item of meaningfulResponseLines) {
           emitConversation({ broadcast, taskId: task.id, from: primaryName, to: `${BOSS_NAME} (Boss)`, text: item });
@@ -3459,7 +3476,9 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     const meaningfulApprovalLines = meaningfulLogsOnly
       ? nonSpamApprovalLines.filter((item) => isMeaningfulAssistantLine(item) || isLikelyFailureLine(item))
       : nonSpamApprovalLines;
-    const meaningfulEventLogLines = meaningfulLogsOnly ? nonSpamLogLines.filter((item) => isLikelyFailureLine(item)) : nonSpamLogLines;
+    const meaningfulEventLogLines = meaningfulLogsOnly
+      ? nonSpamLogLines.filter((item) => isLikelyFailureLine(item) || isImplementationProgressLine(item))
+      : nonSpamLogLines;
 
     const toolNoiseBlob = `${finalResponseLines.join('\n')}\n${event.approvalText.join('\n')}`.trim();
     if (suppressToolSpam && isNoisyToolResponseText(toolNoiseBlob)) {
