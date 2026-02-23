@@ -534,6 +534,10 @@ function needsApprovalFromOutput(lines) {
   return (asksQuestion || asksClarification) && !completionSignals;
 }
 
+function shouldRequireUserApproval() {
+  return toBoolEnv(process.env.GOOSE_REQUIRE_USER_APPROVAL, false);
+}
+
 function normalizeTaskKey(value) {
   return String(value || '')
     .trim()
@@ -2974,7 +2978,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
 
   const completeSuccessfulRun = async (outputLines) => {
     if (!isCurrentRun()) return;
-    if (needsApprovalFromOutput(outputLines)) {
+    if (shouldRequireUserApproval() && needsApprovalFromOutput(outputLines)) {
       emitLine(broadcast, task.id, `${primaryName}> waiting for user approval/clarification before proceeding.`);
       updateTaskStatusIfCurrent({ status: 'review', runtimeStatus: 'waiting_for_approval' });
       return;
