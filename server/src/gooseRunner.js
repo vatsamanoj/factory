@@ -727,6 +727,7 @@ function withSmartCodeExecutionPrompt(prompt, mode = 'default') {
     '- Prefer targeted commands over broad scans; avoid repeating equivalent commands.',
     '- Read only relevant snippets (use file+line targeting) instead of full-file dumps when possible.',
     '- Batch related edits, then run the smallest meaningful validation command.',
+    '- For file edits, prefer Developer.textEditor/Developer.shell directly; avoid wrapping edits in code_execution execute() calls.',
     '- Keep tool output concise: summarize findings in 1-2 lines and continue execution.',
     compactMode
       ? '- Do not ask for user input; make the safest assumption and proceed.'

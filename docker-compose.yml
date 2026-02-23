@@ -28,10 +28,13 @@ services:
       GOOSE_SUBAGENTS_MAX: "1"
       GOOSE_MANAGER_REQUIRED: "0"
       GOOSE_ALLOW_MOCK_FALLBACK: "0"
+      GOOSE_FAST_TASK_KEYS: "gse"
+      GOOSE_FAST_MAX_TURNS: "14"
+      GOOSE_FAST_MAX_TOOL_REPETITIONS: "2"
+      GOOSE_FAST_TIMEOUT_MS: "420000"
       GOOSE_TIMEOUT_MS: "900000"
-      GOOSE_FAST_TIMEOUT_MS: "900000"
-      GOOSE_NO_OUTPUT_TIMEOUT_MS: "600000"
-      GOOSE_INITIAL_NO_OUTPUT_TIMEOUT_MS: "900000"
+      GOOSE_NO_OUTPUT_TIMEOUT_MS: "180000"
+      GOOSE_INITIAL_NO_OUTPUT_TIMEOUT_MS: "300000"
     volumes:
       - /home/infosys/work/repo:/work/repo
       - /home/infosys/.config/goose:/seed/goose/config:ro
