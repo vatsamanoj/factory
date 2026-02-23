@@ -10,7 +10,7 @@ RUN npm run build
 FROM node:22-alpine
 WORKDIR /app
 
-RUN apk add --no-cache nginx git bash
+RUN apk add --no-cache nginx git bash ripgrep
 
 # Frontend assets
 COPY --from=builder /app/web/dist /usr/share/nginx/html
