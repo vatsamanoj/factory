@@ -17,7 +17,7 @@ services:
       GOOSE_DEFAULT_MODEL: "kilo/auto"
       GOOSE_NO_PROFILE: "0"
       GOOSE_ENABLE_EVERYTHING: "1"
-      GOOSE_FORCE_BUILTINS: "developer,autovisualiser"
+      GOOSE_FORCE_BUILTINS: "developer"
       GOOSE_HOME: /app/server/data/goose-runtime
       GOOSE_PRESERVE_HOME: "0"
       XDG_CONFIG_HOME: /app/server/data/goose-runtime/.config

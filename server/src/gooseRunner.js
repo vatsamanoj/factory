@@ -111,10 +111,20 @@ function isBoilerplateAssistantLine(value) {
 function isMeaningfulAssistantLine(value) {
   const text = String(value || '').trim();
   if (!text) return false;
+  if (isTrivialStreamFragment(text)) return false;
   if (isNoisyToolResponseText(text)) return false;
   if (isBoilerplateAssistantLine(text)) return false;
   if (/^event:/i.test(text)) return false;
   return true;
+}
+
+function isTrivialStreamFragment(value) {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (/^[:;.,`'"()[\]{}<>\\/|_-]+$/.test(text)) return true;
+  if (/^\d+\.?$/.test(text)) return true;
+  if (text.length <= 2 && /^[A-Za-z0-9]+$/.test(text)) return true;
+  return false;
 }
 
 function buildHeartbeatLine({ agentName, startedAt, phase = 'working', events = 0, idleSec = 0 }) {
@@ -155,6 +165,7 @@ function emitConversation({ broadcast, taskId, from, to, text }) {
 
     // Drop noisy token-by-token stream fragments; keep sentence-level updates.
     if (isLowSignalToken(normalized)) continue;
+    if (isTrivialStreamFragment(normalized)) continue;
 
     emitLine(broadcast, taskId, `${from} -> ${to}: ${normalized}`);
   }
@@ -394,11 +405,17 @@ function mergePluginEnv(baseEnv, plugins) {
 
 function resolveForcedBuiltins() {
   const raw = String(process.env.GOOSE_FORCE_BUILTINS || 'developer').trim();
-  if (!raw) return [];
-  return raw
+  const parsed = raw
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+  const unique = Array.from(new Set(parsed));
+  const forceDeveloperOnly = toBoolEnv(
+    process.env.GOOSE_CONTAINER_DEVELOPER_ONLY_BUILTINS,
+    toBoolEnv(process.env.GOOSE_LOCAL_IN_CONTAINER, false)
+  );
+  if (!forceDeveloperOnly) return unique;
+  return ['developer'];
 }
 
 function parseAgentPlugin(plugins) {
@@ -3241,6 +3258,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     let nonWritingLastCheckAt = 0;
     let nonWritingLoopAborted = false;
     let nonWritingWriteDetected = false;
+    let nonWritingGuardCheckFailures = 0;
     const setPhase = (phase) => {
       const next = String(phase || '').trim();
       if (!next || next === currentPhase) return;
@@ -3284,7 +3302,27 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
             bridgeAbortController.abort();
           }
         })
-        .catch(() => {})
+        .catch((error) => {
+          nonWritingGuardCheckFailures += 1;
+          if (nonWritingGuardCheckFailures <= 2) {
+            emitLine(
+              broadcast,
+              task.id,
+              `${primaryName}> non-writing guard check failed (${nonWritingGuardCheckFailures}): ${String(
+                error?.message || error
+              ).slice(0, 180)}`
+            );
+          }
+          if (!nonWritingLoopAborted && nonWritingToolEvents >= nonWritingToolEventLimit) {
+            nonWritingLoopAborted = true;
+            emitLine(
+              broadcast,
+              task.id,
+              `${primaryName}> cannot verify write progress after repeated tool events; aborting run as non-writing loop.`
+            );
+            bridgeAbortController.abort();
+          }
+        })
         .finally(() => {
           nonWritingCheckInFlight = false;
         });
@@ -3436,6 +3474,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   let nonWritingLastCheckAt = 0;
   let nonWritingWriteDetected = false;
   let nonWritingStopRequested = false;
+  let nonWritingGuardCheckFailures = 0;
   const repetitiveToolResponseLimit = parsePositiveInt(process.env.GOOSE_REPETITIVE_TOOL_RESPONSE_LIMIT, 3);
   let repeatedToolResponseCount = 0;
   let lastToolResponseFingerprint = '';
@@ -3496,7 +3535,25 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
           );
         }
       })
-      .catch(() => {})
+      .catch((error) => {
+        nonWritingGuardCheckFailures += 1;
+        if (nonWritingGuardCheckFailures <= 2) {
+          emitLine(
+            broadcast,
+            task.id,
+            `${primaryName}> non-writing guard check failed (${nonWritingGuardCheckFailures}): ${String(
+              error?.message || error
+            ).slice(0, 180)}`
+          );
+        }
+        if (!nonWritingStopRequested && nonWritingToolEvents >= nonWritingToolEventLimit) {
+          nonWritingStopRequested = true;
+          terminateProcess(
+            `${primaryName}> cannot verify write progress after repeated tool events; terminating non-writing loop.`,
+            'no_write_progress'
+          );
+        }
+      })
       .finally(() => {
         nonWritingCheckInFlight = false;
       });
