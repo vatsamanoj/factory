@@ -13,4 +13,4 @@ RUN npm install -g serve
 COPY --from=builder /app/dist ./dist
 EXPOSE 5174
 # The -s flag handles React Router (SPA) and -l sets the port
-CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:5174"]
+CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:5173"]
