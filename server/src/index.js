@@ -86,7 +86,84 @@ function resolveIdempotencyKey(req, taskId, action) {
   return `task-${taskId}:${String(action || 'run')}`;
 }
 
+function detectContainerRuntime() {
+  if (String(process.env.GOOSE_FORCE_DOCKER_MODE || '').trim() === '1') return true;
+  if (fs.existsSync('/.dockerenv')) return true;
+  try {
+    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
+    return /(docker|containerd|kubepods|podman)/i.test(cgroup);
+  } catch {
+    return false;
+  }
+}
+
+function resolveBridgeUrls() {
+  const single = String(process.env.GOOSE_BRIDGE_URL || '').trim();
+  const listRaw = String(process.env.GOOSE_BRIDGE_URLS || '').trim();
+  const urls = []
+    .concat(listRaw ? listRaw.split(',').map((item) => String(item || '').trim()) : [])
+    .concat(single ? [single] : [])
+    .map((item) => item.replace(/\/+$/, ''))
+    .filter(Boolean)
+    .filter((item, idx, arr) => arr.indexOf(item) === idx);
+  return urls;
+}
+
+async function checkBridgeUrl(url, token, timeoutMs) {
+  const headers = token ? { 'x-goose-bridge-token': token, 'content-type': 'application/json' } : {};
+  const check = async (path, method = 'GET', body = undefined) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${url}${path}`, {
+        method,
+        headers,
+        body,
+        signal: controller.signal
+      });
+      const text = await response.text().catch(() => '');
+      return {
+        ok: response.ok,
+        status: response.status,
+        body: text.slice(0, 300)
+      };
+    } catch (error) {
+      return { ok: false, status: 0, error: String(error?.message || error) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const health = await check('/health');
+  const probe = await check('/v1/probe', 'POST', JSON.stringify({}));
+  return { url, health, probe, reachable: Boolean(probe.ok || health.ok) };
+}
+
 app.get('/api/health', (_, res) => res.json({ ok: true }));
+
+app.get('/api/bridge/diagnostics', async (_, res) => {
+  const urls = resolveBridgeUrls();
+  const token = String(process.env.GOOSE_BRIDGE_TOKEN || '').trim();
+  const timeoutMs = Number.parseInt(String(process.env.GOOSE_BRIDGE_DIAG_TIMEOUT_MS || '5000'), 10) || 5000;
+  const inContainer = detectContainerRuntime();
+  if (!urls.length) {
+    return res.json({
+      ok: false,
+      inContainer,
+      error: 'No bridge URL configured',
+      suggestions: ['Set GOOSE_BRIDGE_URL or GOOSE_BRIDGE_URLS']
+    });
+  }
+  const results = await Promise.all(urls.map((url) => checkBridgeUrl(url, token, timeoutMs)));
+  const reachable = results.some((item) => item.reachable);
+  res.json({
+    ok: reachable,
+    inContainer,
+    configuredUrls: urls,
+    timeoutMs,
+    diagnostics: results
+  });
+});
 
 app.get('/api/tasks', (_, res) => {
   const projectId = _.query?.projectId;
