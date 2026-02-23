@@ -12,6 +12,9 @@ services:
       DASHBOARD_DB_PATH: /app/server/data/dashboard.db
       GOOSE_CODE_INDEX_LANCEDB_DIR: /app/server/data/codeintel.lancedb
       GOOSE_REPO_ROOT: /app/server/data/repos
+      GOOSE_ENABLE_SUBAGENTS: "0"
+      GOOSE_SUBAGENTS_MAX: "1"
+      GOOSE_MANAGER_REQUIRED: "0"
     volumes:
       - factory_server_data:/app/server/data
     networks:
