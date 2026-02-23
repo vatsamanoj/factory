@@ -1,0 +1,13 @@
+FROM node:20-alpine
+WORKDIR /app/server
+
+COPY server/package*.json ./
+RUN npm install --omit=dev
+
+COPY server/src ./src
+COPY server/schemas ./schemas
+
+RUN mkdir -p /app/server/data
+
+EXPOSE 8787
+CMD ["node", "src/index.js"]

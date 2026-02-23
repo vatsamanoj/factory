@@ -1,4 +1,4 @@
-# Stage 1: Build
+# Stage 1: Build frontend
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -6,11 +6,10 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# Stage 2: Serve
-FROM node:20-alpine
-WORKDIR /app
-RUN npm install -g serve
-COPY --from=builder /app/dist ./dist
-EXPOSE 5174
-# The -s flag handles React Router (SPA) and -l sets the port
-CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:5173"]
+# Stage 2: Serve frontend with API/WebSocket reverse proxy
+FROM nginx:1.27-alpine
+WORKDIR /usr/share/nginx/html
+COPY --from=builder /app/dist ./
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 5173
+CMD ["nginx", "-g", "daemon off;"]
