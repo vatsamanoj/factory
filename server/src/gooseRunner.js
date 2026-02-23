@@ -313,14 +313,26 @@ function resolveForcedBuiltins() {
 }
 
 function parseAgentPlugin(plugins) {
+  const defaultProvider = String(process.env.GOOSE_DEFAULT_PROVIDER || '').trim();
+  const defaultModel = String(process.env.GOOSE_DEFAULT_MODEL || '').trim();
   const plugin = plugins.find((item) => item.type === 'agent');
-  if (!plugin?.url) return {};
+  if (!plugin?.url) {
+    if (defaultProvider || defaultModel) {
+      return {
+        provider: defaultProvider || undefined,
+        model: defaultModel || undefined,
+        useDeviceConfig: false
+      };
+    }
+    return {};
+  }
   const cfg = plugin.config && typeof plugin.config === 'object' ? plugin.config : {};
   const [provider, model] = String(plugin.url).split(':');
+  const useDeviceConfig = cfg.useDeviceConfig !== false;
   return {
-    provider: provider || undefined,
-    model: model || undefined,
-    useDeviceConfig: cfg.useDeviceConfig !== false
+    provider: provider || defaultProvider || undefined,
+    model: model || defaultModel || undefined,
+    useDeviceConfig
   };
 }
 
