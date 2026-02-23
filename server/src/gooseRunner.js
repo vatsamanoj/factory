@@ -490,6 +490,18 @@ function shouldAllowMockFallback() {
   return toBoolEnv(process.env.GOOSE_ALLOW_MOCK_FALLBACK, false);
 }
 
+function isRunningInContainer() {
+  if (toBoolEnv(process.env.GOOSE_FORCE_DOCKER_MODE, false)) return true;
+  if (fs.existsSync('/.dockerenv')) return true;
+  try {
+    const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
+    if (/(docker|containerd|kubepods|podman)/i.test(cgroup)) return true;
+  } catch {
+    // Ignore cgroup read failures and treat as non-container runtime.
+  }
+  return false;
+}
+
 function resolveGooseBridgeConfig() {
   const url = String(process.env.GOOSE_BRIDGE_URL || '').trim().replace(/\/+$/, '');
   const token = String(process.env.GOOSE_BRIDGE_TOKEN || '').trim();
@@ -2518,8 +2530,26 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
 
   const gooseEnv = mergePluginEnv(buildGooseEnv(), plugins);
   const gooseBridge = resolveGooseBridgeConfig();
+  const runningInContainer = isRunningInContainer();
+  const bridgeOnlyMode = runningInContainer;
+  const useBridge = bridgeOnlyMode || gooseBridge.enabled;
+  if (bridgeOnlyMode) {
+    emitLine(broadcast, task.id, `${primaryName}> runtime detected as container; bridge-only goose execution enabled.`);
+  }
+  if (bridgeOnlyMode && !gooseBridge.enabled) {
+    emitLine(
+      broadcast,
+      task.id,
+      `${primaryName}> bridge-only mode requires GOOSE_BRIDGE_URL, but it is not set; marking task failed.`
+    );
+    updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
+    clearRunIfCurrent();
+    clearInterval(leaseHeartbeat);
+    releaseLease('failed');
+    return;
+  }
   const allowMockFallback = shouldAllowMockFallback();
-  const gooseProbe = gooseBridge.enabled
+  const gooseProbe = useBridge
     ? await probeGooseBridge(gooseBridge).catch((error) => ({ ok: false, reason: String(error?.message || error) }))
     : await new Promise((resolve) => {
         const child = spawn('goose', ['--version'], {
@@ -2919,7 +2949,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   if (textIdx >= 0 && textIdx + 1 < logArgs.length) logArgs[textIdx + 1] = `<hydrated_prompt:${directPrompt.length} chars>`;
   emitLine(broadcast, task.id, `${primaryName}> command: goose ${logArgs.join(' ')}`);
 
-  if (gooseBridge.enabled) {
+  if (useBridge) {
     const timeoutMs = limits.timeoutMs;
     const noOutputTimeoutMs = parsePositiveInt(process.env.GOOSE_NO_OUTPUT_TIMEOUT_MS, 120000);
     const mappedCwd = mapCwdForGooseBridge(workingDirectory, gooseBridge);
