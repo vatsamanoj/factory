@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: factory-dashboard
     restart: always
     ports:
       - "5173:5173"
