@@ -123,6 +123,27 @@ function isRunningRuntimeStatus(runtimeStatus) {
   return runtimeStatus === 'running' || runtimeStatus === 'build_running';
 }
 
+function isHeartbeatLogLine(line) {
+  return /\bheartbeat\b/i.test(String(line || ''));
+}
+
+function normalizeTaskLogs(lines) {
+  const input = Array.isArray(lines) ? lines : [];
+  const output = [];
+  let latestHeartbeat = '';
+  for (const line of input) {
+    const text = String(line || '');
+    if (!text) continue;
+    if (isHeartbeatLogLine(text)) {
+      latestHeartbeat = text;
+      continue;
+    }
+    output.push(text);
+  }
+  if (latestHeartbeat) output.push(latestHeartbeat);
+  return output;
+}
+
 export default function App() {
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -297,10 +318,13 @@ export default function App() {
     const socket = openTaskSocket({
       onEvent(event) {
         if (event.type === 'task_log') {
-          setLogsByTask((prev) => ({
-            ...prev,
-            [event.taskId]: [...(prev[event.taskId] || []), event.line]
-          }));
+          setLogsByTask((prev) => {
+            const nextLines = normalizeTaskLogs([...(prev[event.taskId] || []), event.line]);
+            return {
+              ...prev,
+              [event.taskId]: nextLines
+            };
+          });
         }
 
         if (event.type === 'task_status') {
@@ -319,6 +343,15 @@ export default function App() {
     if (!latest) return;
     setSelectedTask((prev) => (prev && prev.id === latest.id ? latest : prev));
   }, [tasks, selectedTask?.id]);
+
+  useEffect(() => {
+    if (!selectedTask?.id) return;
+    const effectiveRuntime = getEffectiveRuntimeStatus(selectedTask);
+    if (selectedTask.status !== 'done' || effectiveRuntime !== 'success') return;
+    const lines = logsByTask[selectedTask.id] || [];
+    const merged = lines.some((line) => String(line || '').toLowerCase().includes('auto-merge completed'));
+    if (merged) setSelectedTask(null);
+  }, [selectedTask, logsByTask]);
 
   // Fallback polling so UI self-heals if a WS task_status event is missed.
   useEffect(() => {
@@ -339,7 +372,7 @@ export default function App() {
     Promise.all([getTaskLogs(selectedTask.id, 20000), getTaskAttachments(selectedTask.id)])
       .then(([logData, attachmentData]) => {
         const lines = (logData.logs || []).map((row) => row.line);
-        setLogsByTask((prev) => ({ ...prev, [selectedTask.id]: lines }));
+        setLogsByTask((prev) => ({ ...prev, [selectedTask.id]: normalizeTaskLogs(lines) }));
         setAttachmentsByTask((prev) => ({ ...prev, [selectedTask.id]: attachmentData.attachments || [] }));
       })
       .catch(console.error);
@@ -354,7 +387,7 @@ export default function App() {
       getTaskLogs(selectedTask.id, 20000)
         .then((logData) => {
           const lines = (logData.logs || []).map((row) => row.line);
-          setLogsByTask((prev) => ({ ...prev, [selectedTask.id]: lines }));
+          setLogsByTask((prev) => ({ ...prev, [selectedTask.id]: normalizeTaskLogs(lines) }));
         })
         .catch(() => {});
     }, pollMs);
@@ -543,7 +576,7 @@ export default function App() {
     setSelectedTask((prev) => (prev && prev.id === task.id ? task : prev));
     const logData = await getTaskLogs(taskId, 20000);
     const lines = (logData.logs || []).map((row) => row.line);
-    setLogsByTask((prev) => ({ ...prev, [taskId]: lines }));
+    setLogsByTask((prev) => ({ ...prev, [taskId]: normalizeTaskLogs(lines) }));
   }
 
   async function handleStopTask(taskId) {
@@ -552,7 +585,7 @@ export default function App() {
     setSelectedTask((prev) => (prev && prev.id === task.id ? task : prev));
     const logData = await getTaskLogs(taskId, 20000);
     const lines = (logData.logs || []).map((row) => row.line);
-    setLogsByTask((prev) => ({ ...prev, [taskId]: lines }));
+    setLogsByTask((prev) => ({ ...prev, [taskId]: normalizeTaskLogs(lines) }));
   }
 
   async function handleRefreshAttachments(taskId) {
