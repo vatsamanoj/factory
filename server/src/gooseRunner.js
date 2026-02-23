@@ -3046,15 +3046,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
           }
         }
 
-        const fallbackMergeBecauseNoCommits = Boolean(project.autoPr && !project.autoMerge && prResult?.skipped && prResult?.reason === 'no-commits');
-        const shouldAutoMerge = Boolean(project.autoMerge || fallbackMergeBecauseNoCommits || forceAutoMerge);
-        if (fallbackMergeBecauseNoCommits) {
-          emitLine(
-            broadcast,
-            task.id,
-            `repo> PR skipped due to no-commits; applying fallback auto-merge flow to ${mergeTarget}.`
-          );
-        }
+        const shouldAutoMerge = Boolean(project.autoMerge || forceAutoMerge);
 
         if (shouldAutoMerge) {
           await autoMergeTaskBranchToTest(repo, task, (line) => emitLine(broadcast, task.id, line), mergeTarget);
