@@ -30,6 +30,8 @@ const THINKING_MESSAGES = [
   'comparing options for safer changes...',
   'drafting the next change...'
 ];
+const HEARTBEAT_FRAMES = ['|', '/', '-', '\\'];
+const HEARTBEAT_STATES = ['analyzing', 'editing', 'validating', 'checking'];
 
 function emitLine(broadcast, taskId, line) {
   const normalized = String(line || '')
@@ -60,6 +62,7 @@ function randomThinkingMessage() {
 }
 
 function startThinkingTicker({ broadcast, taskId, agentName, intervalMs = 700 }) {
+  if (toBoolEnv(process.env.GOOSE_HEARTBEAT_ONLY, true)) return null;
   let last = '';
   const emitThinking = () => {
     let next = randomThinkingMessage();
@@ -71,6 +74,36 @@ function startThinkingTicker({ broadcast, taskId, agentName, intervalMs = 700 })
   };
   emitThinking();
   return setInterval(emitThinking, intervalMs);
+}
+
+function isLikelyFailureLine(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return false;
+  return /(error|failed|failure|exception|traceback|enoent|econn|timeout|timed out|stderr>)/i.test(text);
+}
+
+function isBoilerplateAssistantLine(value) {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (/^(\[hydrated\]|TASK:|GOAL:|FILES:|CONSTRAINTS:|DONE_WHEN:|CREATE_FILES:|APIS:|MCPS:|DOCS:)/i.test(text)) return true;
+  if (/^Rajiv .*>\s*(thinking|reviewing|planning|checking|mapping|comparing|drafting)/i.test(text)) return true;
+  return false;
+}
+
+function isMeaningfulAssistantLine(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (isNoisyToolResponseText(text)) return false;
+  if (isBoilerplateAssistantLine(text)) return false;
+  if (/^event:/i.test(text)) return false;
+  return true;
+}
+
+function buildHeartbeatLine({ agentName, startedAt, phase = 'working', events = 0, idleSec = 0 }) {
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - Number(startedAt || Date.now())) / 1000));
+  const frame = HEARTBEAT_FRAMES[elapsedSec % HEARTBEAT_FRAMES.length];
+  const state = HEARTBEAT_STATES[elapsedSec % HEARTBEAT_STATES.length];
+  return `${agentName}> heartbeat ${frame} ${state} phase=${phase} events=${events} idle=${idleSec}s elapsed=${elapsedSec}s`;
 }
 
 function emitConversation({ broadcast, taskId, from, to, text }) {
@@ -2780,9 +2813,11 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   emitLine(broadcast, task.id, `${primaryName}> plugin extensions: ${extensionArgs.length ? 'enabled' : 'none'}`);
   const verboseStream = toBoolEnv(process.env.GOOSE_VERBOSE_STREAM, false);
   const heartbeatEnabled = true;
-  const heartbeatMs = parsePositiveInt(process.env.GOOSE_HEARTBEAT_MS, 700);
-  const activityPulseEnabled = true;
-  const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 900);
+  const heartbeatMs = parsePositiveInt(process.env.GOOSE_HEARTBEAT_MS, 1500);
+  const heartbeatOnly = toBoolEnv(process.env.GOOSE_HEARTBEAT_ONLY, true);
+  const activityPulseEnabled = !heartbeatOnly;
+  const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 1800);
+  const meaningfulLogsOnly = toBoolEnv(process.env.GOOSE_MEANINGFUL_LOGS_ONLY, true);
   if (verboseStream) {
     emitLine(broadcast, task.id, `${primaryName}> verbose stream logging enabled (raw events + summaries).`);
   }
@@ -2926,8 +2961,15 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
       return;
     }
 
-    if (task.assigneeType === 'goose' && project && (project.autoPr || project.autoMerge)) {
-      const mergeTarget = process.env.GOOSE_TEST_BRANCH || 'test';
+    const forceAutoMerge = toBoolEnv(process.env.GOOSE_FORCE_AUTO_MERGE, false);
+    const mergeTarget = String(process.env.GOOSE_AUTO_MERGE_TARGET || process.env.GOOSE_TEST_BRANCH || 'test').trim() || 'test';
+    const allowPostRunAutomation = task.assigneeType === 'goose' && project && (project.autoPr || project.autoMerge || forceAutoMerge);
+    emitLine(
+      broadcast,
+      task.id,
+      `repo> automation flags: autoPr=${Boolean(project?.autoPr)} autoMerge=${Boolean(project?.autoMerge)} forceAutoMerge=${forceAutoMerge} target=${mergeTarget}`
+    );
+    if (allowPostRunAutomation) {
       const prTarget = String(task.baseBranch || project.defaultBranch || 'main').trim() || 'main';
       try {
         const repo = await ensureProjectRepoReady(project, (line) => emitLine(broadcast, task.id, line), {
@@ -2944,7 +2986,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
         }
 
         const fallbackMergeBecauseNoCommits = Boolean(project.autoPr && !project.autoMerge && prResult?.skipped && prResult?.reason === 'no-commits');
-        const shouldAutoMerge = Boolean(project.autoMerge || fallbackMergeBecauseNoCommits);
+        const shouldAutoMerge = Boolean(project.autoMerge || fallbackMergeBecauseNoCommits || forceAutoMerge);
         if (fallbackMergeBecauseNoCommits) {
           emitLine(
             broadcast,
@@ -3145,7 +3187,11 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     const activityPulseMs = parsePositiveInt(process.env.GOOSE_ACTIVITY_PULSE_MS, 900);
     const activityPulse = setInterval(() => {
       const idleSec = Math.floor((Date.now() - phaseUpdatedAt) / 1000);
-      emitLine(broadcast, task.id, `${primaryName}> ${randomThinkingMessage()} phase=${currentPhase} events=${eventSeq} idle=${idleSec}s`);
+      emitLine(
+        broadcast,
+        task.id,
+        buildHeartbeatLine({ agentName: primaryName, startedAt, phase: currentPhase, events: eventSeq, idleSec })
+      );
     }, activityPulseMs);
     const bridgeResult = await runGooseThroughBridge({
       bridgeConfig: gooseBridge,
@@ -3159,8 +3205,10 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
         if (!isCurrentRun()) return;
         const parsed = parseJsonLine(line);
         if (!parsed) {
-          outputLines.push(line);
-          emitLine(broadcast, task.id, `${primaryName}(stdout)> ${line}`);
+          if (!meaningfulLogsOnly || isLikelyFailureLine(line)) {
+            outputLines.push(line);
+            emitLine(broadcast, task.id, `${primaryName}(stdout)> ${line}`);
+          }
           if (String(line).includes('new session')) setPhase('session_started');
           return;
         }
@@ -3183,17 +3231,28 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
           ? event.approvalText.filter((item) => !isNoisyToolResponseText(item))
           : event.approvalText;
         const nonSpamLogLines = suppressToolSpam ? event.logLines.filter((item) => !isNoisyToolResponseText(item)) : event.logLines;
-        for (const item of nonSpamResponseLines) {
+        const meaningfulResponseLines = meaningfulLogsOnly
+          ? nonSpamResponseLines.filter((item) => isMeaningfulAssistantLine(item) || isLikelyFailureLine(item))
+          : nonSpamResponseLines;
+        const meaningfulApprovalLines = meaningfulLogsOnly
+          ? nonSpamApprovalLines.filter((item) => isMeaningfulAssistantLine(item) || isLikelyFailureLine(item))
+          : nonSpamApprovalLines;
+        const meaningfulEventLogLines = meaningfulLogsOnly
+          ? nonSpamLogLines.filter((item) => isLikelyFailureLine(item))
+          : nonSpamLogLines;
+        for (const item of meaningfulResponseLines) {
           emitConversation({ broadcast, taskId: task.id, from: primaryName, to: `${BOSS_NAME} (Boss)`, text: item });
         }
-        for (const text of nonSpamResponseLines) outputLines.push(text);
-        for (const text of nonSpamApprovalLines) outputLines.push(text);
-        for (const rendered of nonSpamLogLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
+        for (const text of meaningfulResponseLines) outputLines.push(text);
+        for (const text of meaningfulApprovalLines) outputLines.push(text);
+        for (const rendered of meaningfulEventLogLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
       },
       onStderrLine: (line) => {
         if (!isCurrentRun()) return;
-        outputLines.push(`stderr> ${line}`);
-        emitLine(broadcast, task.id, `stderr> ${line}`);
+        if (!meaningfulLogsOnly || isLikelyFailureLine(line)) {
+          outputLines.push(`stderr> ${line}`);
+          emitLine(broadcast, task.id, `stderr> ${line}`);
+        }
       }
     }).catch((error) => ({ code: 1, reason: String(error?.message || error) }));
 
@@ -3289,7 +3348,12 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
           );
           return;
         }
-        emitLine(broadcast, task.id, `${primaryName}> ${randomThinkingMessage()} (${seconds}s elapsed)`);
+        const idleSec = Math.floor((Date.now() - phaseUpdatedAt) / 1000);
+        emitLine(
+          broadcast,
+          task.id,
+          buildHeartbeatLine({ agentName: primaryName, startedAt, phase: currentPhase, events: eventSeq, idleSec })
+        );
       }, heartbeatMs)
     : null;
 
@@ -3298,15 +3362,21 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
   const activityPulse = activityPulseEnabled
     ? setInterval(() => {
         const idleSec = Math.floor((Date.now() - phaseUpdatedAt) / 1000);
-        emitLine(broadcast, task.id, `${primaryName}> ${randomThinkingMessage()} phase=${currentPhase} events=${eventSeq} idle=${idleSec}s`);
+        emitLine(
+          broadcast,
+          task.id,
+          buildHeartbeatLine({ agentName: primaryName, startedAt, phase: currentPhase, events: eventSeq, idleSec })
+        );
       }, activityPulseMs)
     : null;
   pumpStream(child.stdout, (line) => {
     lastOutputAt = Date.now();
     const parsed = parseJsonLine(line);
     if (!parsed) {
-      outputLines.push(line);
-      emitLine(broadcast, task.id, `${primaryName}(stdout)> ${line}`);
+      if (!meaningfulLogsOnly || isLikelyFailureLine(line)) {
+        outputLines.push(line);
+        emitLine(broadcast, task.id, `${primaryName}(stdout)> ${line}`);
+      }
       if (String(line).includes('new session')) setPhase('session_started');
       return;
     }
@@ -3329,6 +3399,13 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
       ? event.approvalText.filter((item) => !isNoisyToolResponseText(item))
       : event.approvalText;
     const nonSpamLogLines = suppressToolSpam ? event.logLines.filter((item) => !isNoisyToolResponseText(item)) : event.logLines;
+    const meaningfulResponseLines = meaningfulLogsOnly
+      ? nonSpamResponseLines.filter((item) => isMeaningfulAssistantLine(item) || isLikelyFailureLine(item))
+      : nonSpamResponseLines;
+    const meaningfulApprovalLines = meaningfulLogsOnly
+      ? nonSpamApprovalLines.filter((item) => isMeaningfulAssistantLine(item) || isLikelyFailureLine(item))
+      : nonSpamApprovalLines;
+    const meaningfulEventLogLines = meaningfulLogsOnly ? nonSpamLogLines.filter((item) => isLikelyFailureLine(item)) : nonSpamLogLines;
 
     const toolNoiseBlob = `${finalResponseLines.join('\n')}\n${event.approvalText.join('\n')}`.trim();
     if (suppressToolSpam && isNoisyToolResponseText(toolNoiseBlob)) {
@@ -3373,20 +3450,22 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
       lastToolResponseFingerprint = '';
     }
 
-    for (const item of nonSpamResponseLines) {
+    for (const item of meaningfulResponseLines) {
       emitConversation({ broadcast, taskId: task.id, from: primaryName, to: `${BOSS_NAME} (Boss)`, text: item });
     }
-    for (const text of nonSpamResponseLines) outputLines.push(text);
+    for (const text of meaningfulResponseLines) outputLines.push(text);
     if (verboseStream) {
       emitLine(broadcast, task.id, `${primaryName}(raw:${eventSeq})> ${compactJson(parsed)}`);
     }
-    for (const text of nonSpamApprovalLines) outputLines.push(text);
-    for (const rendered of nonSpamLogLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
+    for (const text of meaningfulApprovalLines) outputLines.push(text);
+    for (const rendered of meaningfulEventLogLines) emitLine(broadcast, task.id, `${primaryName}(event:${eventSeq})> ${rendered}`);
   });
   pumpStream(child.stderr, (line) => {
     lastOutputAt = Date.now();
-    outputLines.push(`stderr> ${line}`);
-    emitLine(broadcast, task.id, `stderr> ${line}`);
+    if (!meaningfulLogsOnly || isLikelyFailureLine(line)) {
+      outputLines.push(`stderr> ${line}`);
+      emitLine(broadcast, task.id, `stderr> ${line}`);
+    }
   });
 
   child.on('error', () => {
