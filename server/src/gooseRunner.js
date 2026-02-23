@@ -503,7 +503,20 @@ function isRunningInContainer() {
 }
 
 function resolveGooseBridgeConfig() {
-  const url = String(process.env.GOOSE_BRIDGE_URL || '').trim().replace(/\/+$/, '');
+  const singleUrl = String(process.env.GOOSE_BRIDGE_URL || '').trim().replace(/\/+$/, '');
+  const listRaw = String(process.env.GOOSE_BRIDGE_URLS || '').trim();
+  const runningInContainer = isRunningInContainer();
+  const urls = []
+    .concat(listRaw ? listRaw.split(',').map((item) => String(item || '').trim()) : [])
+    .concat(singleUrl ? [singleUrl] : [])
+    .concat(
+      runningInContainer
+        ? ['http://host.docker.internal:8788', 'http://172.17.0.1:8788', 'http://gateway.docker.internal:8788']
+        : []
+    )
+    .map((item) => item.replace(/\/+$/, ''))
+    .filter(Boolean)
+    .filter((item, idx, arr) => arr.indexOf(item) === idx);
   const token = String(process.env.GOOSE_BRIDGE_TOKEN || '').trim();
   const mapRaw = String(process.env.GOOSE_BRIDGE_CWD_MAP || '').trim();
   const maps = mapRaw
@@ -519,7 +532,7 @@ function resolveGooseBridgeConfig() {
       return { from, to };
     })
     .filter(Boolean);
-  return { enabled: Boolean(url), url, token, maps };
+  return { enabled: urls.length > 0, url: urls[0] || '', urls, token, maps };
 }
 
 function mapCwdForGooseBridge(cwd, bridgeConfig) {
@@ -537,39 +550,40 @@ async function probeGooseBridge(bridgeConfig) {
   const maxAttempts = parsePositiveInt(process.env.GOOSE_BRIDGE_PROBE_RETRIES, 3);
   const fetchTimeoutMs = parsePositiveInt(process.env.GOOSE_BRIDGE_FETCH_TIMEOUT_MS, 12000);
   const retryBaseMs = parsePositiveInt(process.env.GOOSE_BRIDGE_RETRY_BASE_MS, 400);
+  const urls = Array.isArray(bridgeConfig?.urls) && bridgeConfig.urls.length ? bridgeConfig.urls : [bridgeConfig.url];
   const headers = { 'content-type': 'application/json' };
   if (bridgeConfig.token) headers['x-goose-bridge-token'] = bridgeConfig.token;
   let lastReason = '';
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const response = await fetch(`${bridgeConfig.url}/v1/probe`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({}),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-      // eslint-disable-next-line no-await-in-loop
-      const payload = await response.json().catch(() => ({}));
-      if (response.ok) {
-        return { ok: Boolean(payload?.ok), reason: String(payload?.reason || payload?.version || '') };
+    for (const url of urls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const response = await fetch(`${url}/v1/probe`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({}),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        // eslint-disable-next-line no-await-in-loop
+        const payload = await response.json().catch(() => ({}));
+        if (response.ok) {
+          bridgeConfig.url = url;
+          return { ok: Boolean(payload?.ok), reason: String(payload?.reason || payload?.version || ''), url };
+        }
+        lastReason = `${url}: ${String(payload?.error || payload?.reason || `http_${response.status}`)}`;
+      } catch (error) {
+        clearTimeout(timer);
+        const message = String(error?.name === 'AbortError' ? `bridge probe timeout ${fetchTimeoutMs}ms` : error?.message || error);
+        lastReason = `${url}: ${message}`;
       }
-      lastReason = String(payload?.error || payload?.reason || `http_${response.status}`);
-      const retryable = response.status === 429 || response.status >= 500;
-      if (!retryable || attempt >= maxAttempts) break;
-    } catch (error) {
-      clearTimeout(timer);
-      const message = String(error?.name === 'AbortError' ? `bridge probe timeout ${fetchTimeoutMs}ms` : error?.message || error);
-      lastReason = message;
-      if (attempt >= maxAttempts) break;
     }
     // eslint-disable-next-line no-await-in-loop
     await sleep(computeBackoffMs(attempt, retryBaseMs, 2500));
   }
-  return { ok: false, reason: lastReason || 'bridge probe failed' };
+  return { ok: false, reason: lastReason || `bridge probe failed for urls=${urls.join(',')}` };
 }
 
 async function runGooseThroughBridge({
@@ -585,39 +599,43 @@ async function runGooseThroughBridge({
   const connectAttempts = parsePositiveInt(process.env.GOOSE_BRIDGE_CONNECT_RETRIES, 2);
   const fetchTimeoutMs = parsePositiveInt(process.env.GOOSE_BRIDGE_FETCH_TIMEOUT_MS, 12000);
   const retryBaseMs = parsePositiveInt(process.env.GOOSE_BRIDGE_RETRY_BASE_MS, 400);
+  const urls = Array.isArray(bridgeConfig?.urls) && bridgeConfig.urls.length ? bridgeConfig.urls : [bridgeConfig.url];
   const headers = { 'content-type': 'application/json' };
   if (bridgeConfig.token) headers['x-goose-bridge-token'] = bridgeConfig.token;
   let response = null;
   let openReason = '';
   for (let attempt = 1; attempt <= connectAttempts; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      response = await fetch(`${bridgeConfig.url}/v1/run-stream`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          args,
-          cwd,
-          env,
-          timeoutMs,
-          noOutputTimeoutMs
-        }),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-      if (response.ok) break;
-      // eslint-disable-next-line no-await-in-loop
-      const text = await response.text().catch(() => '');
-      openReason = text || `http_${response.status}`;
-      const retryable = response.status === 429 || response.status >= 500;
-      if (!retryable || attempt >= connectAttempts) return { code: 1, reason: openReason };
-    } catch (error) {
-      clearTimeout(timer);
-      openReason = String(error?.name === 'AbortError' ? `bridge connect timeout ${fetchTimeoutMs}ms` : error?.message || error);
-      if (attempt >= connectAttempts) return { code: 1, reason: openReason };
+    for (const url of urls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        response = await fetch(`${url}/v1/run-stream`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            args,
+            cwd,
+            env,
+            timeoutMs,
+            noOutputTimeoutMs
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (response.ok) {
+          bridgeConfig.url = url;
+          break;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const text = await response.text().catch(() => '');
+        openReason = `${url}: ${text || `http_${response.status}`}`;
+      } catch (error) {
+        clearTimeout(timer);
+        openReason = `${url}: ${String(error?.name === 'AbortError' ? `bridge connect timeout ${fetchTimeoutMs}ms` : error?.message || error)}`;
+      }
     }
+    if (response?.ok) break;
     // eslint-disable-next-line no-await-in-loop
     await sleep(computeBackoffMs(attempt, retryBaseMs, 2500));
   }
@@ -2592,7 +2610,7 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     emitLine(
       broadcast,
       task.id,
-      `${primaryName}> bridge-only mode requires GOOSE_BRIDGE_URL, but it is not set; marking task failed.`
+      `${primaryName}> bridge-only mode requires GOOSE_BRIDGE_URL/GOOSE_BRIDGE_URLS, but none are configured; marking task failed.`
     );
     updateTaskStatusIfCurrent({ status: 'triage', runtimeStatus: 'failed' });
     clearRunIfCurrent();
@@ -3008,7 +3026,11 @@ export async function runGooseExecution({ task, project, hydratedPrompt, plugins
     if (mappedCwd !== workingDirectory) {
       emitLine(broadcast, task.id, `${primaryName}> goose bridge cwd map: ${workingDirectory} -> ${mappedCwd}`);
     }
-    emitLine(broadcast, task.id, `${primaryName}> goose bridge: ${gooseBridge.url}`);
+    emitLine(
+      broadcast,
+      task.id,
+      `${primaryName}> goose bridge: ${gooseBridge.url || gooseBridge.urls?.[0] || 'unresolved'} (candidates: ${(gooseBridge.urls || []).join(', ')})`
+    );
     let eventSeq = 0;
     let currentPhase = 'starting';
     let phaseUpdatedAt = Date.now();
