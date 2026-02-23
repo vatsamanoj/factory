@@ -1,0 +1,20 @@
+{
+  "id": "codex_agent",
+  "label": "Codex Agent (OpenAI)",
+  "type": "agent",
+  "defaultName": "Codex Agent",
+  "defaultUrl": "openai:gpt-5-codex",
+  "version": 1,
+  "configSchema": {
+    "type": "object",
+    "required": ["openaiApiKey"],
+    "properties": {
+      "openaiApiKey": {
+        "type": "string",
+        "minLength": 1,
+        "title": "OpenAI API Key",
+        "secret": true
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "custom_mcp_http",
+  "label": "Custom MCP (HTTP)",
+  "type": "mcp_http",
+  "defaultName": "Custom HTTP MCP",
+  "defaultUrl": "",
+  "version": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "authToken": {
+        "type": "string",
+        "minLength": 1,
+        "title": "Bearer Token",
+        "secret": true
+      }
+    }
+  }
+}

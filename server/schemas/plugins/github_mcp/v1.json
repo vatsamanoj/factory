@@ -1,0 +1,20 @@
+{
+  "id": "github_mcp",
+  "label": "GitHub MCP",
+  "type": "mcp",
+  "defaultName": "GitHub MCP",
+  "defaultUrl": "/home/infosys/factory/node_modules/.bin/mcp-server-github",
+  "version": 1,
+  "configSchema": {
+    "type": "object",
+    "required": ["githubToken"],
+    "properties": {
+      "githubToken": {
+        "type": "string",
+        "minLength": 1,
+        "title": "GitHub Token",
+        "secret": true
+      }
+    }
+  }
+}

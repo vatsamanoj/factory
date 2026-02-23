@@ -1,0 +1,17 @@
+{
+  "id": "filesystem_mcp",
+  "label": "Filesystem MCP",
+  "type": "mcp",
+  "defaultName": "Filesystem MCP",
+  "defaultUrl": "/home/infosys/factory/node_modules/.bin/mcp-server-filesystem /home/infosys/factory",
+  "version": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "env": {
+        "type": "object",
+        "title": "Extra Env (JSON)"
+      }
+    }
+  }
+}

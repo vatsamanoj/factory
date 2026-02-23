@@ -1,0 +1,17 @@
+{
+  "id": "memory_mcp",
+  "label": "Memory MCP",
+  "type": "mcp",
+  "defaultName": "Memory MCP",
+  "defaultUrl": "/home/infosys/factory/node_modules/.bin/mcp-server-memory",
+  "version": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "env": {
+        "type": "object",
+        "title": "Extra Env (JSON)"
+      }
+    }
+  }
+}

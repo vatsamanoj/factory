@@ -1,0 +1,21 @@
+{
+  "name": "Goose C2 Dashboard",
+  "short_name": "Goose C2",
+  "description": "Mobile-first command dashboard for autonomous Goose agents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0f1f",
+  "theme_color": "#0a0f1f",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

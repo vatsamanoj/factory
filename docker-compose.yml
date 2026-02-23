@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: test-factory-dashboard
+    restart: always
+    expose:
+      - "5174"
+    ports:
+      - "5174:5174"
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true

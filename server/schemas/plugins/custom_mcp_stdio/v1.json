@@ -1,0 +1,18 @@
+{
+  "id": "custom_mcp_stdio",
+  "label": "Custom MCP (stdio)",
+  "type": "mcp",
+  "defaultName": "Custom MCP",
+  "defaultUrl": "",
+  "version": 1,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "env": {
+        "type": "object",
+        "title": "Extra Env (JSON)",
+        "description": "Optional env vars key/value"
+      }
+    }
+  }
+}

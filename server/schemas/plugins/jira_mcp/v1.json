@@ -1,0 +1,28 @@
+{
+  "id": "jira_mcp",
+  "label": "Jira MCP",
+  "type": "mcp_http",
+  "defaultName": "Jira MCP",
+  "defaultUrl": "https://jira.example.com/mcp",
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "apiToken",
+      "email"
+    ],
+    "properties": {
+      "apiToken": {
+        "type": "string",
+        "minLength": 1,
+        "title": "API Token",
+        "secret": true
+      },
+      "email": {
+        "type": "string",
+        "minLength": 3,
+        "title": "Account Email"
+      }
+    }
+  },
+  "version": 1
+}

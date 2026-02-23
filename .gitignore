@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+**/dist
+.DS_Store
+*.log
+.config/
+.local/
+.goose-home/
+server/.goose-home/
+server/server/data/
+server/data/

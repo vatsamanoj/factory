@@ -1,0 +1,24 @@
+{
+  "id": "codex_agent",
+  "label": "Codex Agent (Device Profile)",
+  "type": "agent",
+  "defaultName": "Codex Agent",
+  "defaultUrl": "openai:gpt-5.2-codex",
+  "version": 2,
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "useDeviceConfig": {
+        "type": "boolean",
+        "title": "Use Device Goose Config",
+        "default": true
+      },
+      "openaiApiKey": {
+        "type": "string",
+        "minLength": 1,
+        "title": "OpenAI API Key (Optional override)",
+        "secret": true
+      }
+    }
+  }
+}
