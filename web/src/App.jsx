@@ -140,6 +140,7 @@ export default function App() {
   const [dragTaskId, setDragTaskId] = useState(null);
   const [isListening, setIsListening] = useState(false);
   const [showPlugins, setShowPlugins] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [activeSection, setActiveSection] = useState('work-items');
   const [viewMode, setViewMode] = useState('board');
   const [query, setQuery] = useState('');
@@ -275,6 +276,7 @@ export default function App() {
   }, [activeProjectId]);
 
   useEffect(() => {
+    if (!showAdvanced) return undefined;
     let cancelled = false;
     const run = async (silent) => {
       if (cancelled) return;
@@ -288,7 +290,7 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [showAdvanced]);
 
   useEffect(() => {
     const socket = openTaskSocket({
@@ -763,6 +765,15 @@ export default function App() {
               New Project
             </button>
             <button onClick={() => setShowPlugins(true)} className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs font-semibold text-ink">Integrations</button>
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((prev) => !prev)}
+              className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold ${
+                showAdvanced ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-surface text-ink'
+              }`}
+            >
+              Advanced
+            </button>
             <button onClick={() => setShowCreateModal(true)} className="rounded-md bg-accent px-2.5 py-1.5 text-xs font-semibold text-white">New Work Item</button>
             <button onClick={handleVoiceTask} className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold ${isListening ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-surface text-ink'}`}>{isListening ? 'Listening...' : 'Mic'}</button>
           </div>
@@ -890,7 +901,8 @@ export default function App() {
         </div>
 
         <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
-          <div className="rounded-xl border border-border bg-panel p-3 shadow-card">
+          {showAdvanced ? (
+            <div className="rounded-xl border border-border bg-panel p-3 shadow-card">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Bridge Diagnostics</h3>
               <button
@@ -924,7 +936,8 @@ export default function App() {
               ))}
               {!bridgeDiagnostics?.diagnostics?.length ? <p className="text-xs text-muted">No diagnostics data yet.</p> : null}
             </div>
-          </div>
+            </div>
+          ) : null}
 
           <div className="no-scrollbar flex gap-2 overflow-x-auto lg:hidden">
             {SECTION_TABS.map((tab) => (
