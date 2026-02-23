@@ -16,6 +16,8 @@ fi
 export GOOSE_BRIDGE_BIND="${GOOSE_BRIDGE_BIND:-0.0.0.0}"
 export GOOSE_BRIDGE_PORT="${GOOSE_BRIDGE_PORT:-8788}"
 export GOOSE_BRIDGE_TOKEN="factory-bridge-token"
+export GOOSE_BRIDGE_CONTAINER_USE="${GOOSE_BRIDGE_CONTAINER_USE:-1}"
+export GOOSE_BRIDGE_CONTAINER_USE_BUILTIN="${GOOSE_BRIDGE_CONTAINER_USE_BUILTIN:-container-use}"
 
 nohup node "${ROOT_DIR}/bridge/goose-bridge.js" >>"${LOG_FILE}" 2>&1 &
 echo $! > "${PID_FILE}"

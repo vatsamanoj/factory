@@ -161,6 +161,10 @@ app.get('/api/bridge/diagnostics', async (_, res) => {
     inContainer,
     configuredUrls: urls,
     timeoutMs,
+    bridgeMode: {
+      containerUseEnabled: String(process.env.GOOSE_BRIDGE_CONTAINER_USE || '').trim() !== '0',
+      containerUseBuiltin: String(process.env.GOOSE_BRIDGE_CONTAINER_USE_BUILTIN || 'container-use').trim() || 'container-use'
+    },
     diagnostics: results
   });
 });

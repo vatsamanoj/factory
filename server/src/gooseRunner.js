@@ -669,6 +669,8 @@ async function runGooseThroughBridge({
         if (typeof event.line === 'string') onStdoutLine(event.line);
       } else if (type === 'stderr') {
         if (typeof event.line === 'string') onStderrLine(event.line);
+      } else if (type === 'info') {
+        if (typeof event.message === 'string') onStderrLine(`[bridge] ${event.message}`);
       } else if (type === 'heartbeat') {
         // Keepalive from bridge; no-op.
       } else if (type === 'close') {

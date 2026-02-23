@@ -14,6 +14,8 @@ const runGraceKillMs = Number.parseInt(String(process.env.GOOSE_BRIDGE_GRACE_KIL
 const runHeartbeatMs = Number.parseInt(String(process.env.GOOSE_BRIDGE_HEARTBEAT_MS || '15000'), 10) || 15000;
 const maxRunTimeoutMs = Number.parseInt(String(process.env.GOOSE_BRIDGE_MAX_RUN_TIMEOUT_MS || '3600000'), 10) || 3600000;
 const maxNoOutputTimeoutMs = Number.parseInt(String(process.env.GOOSE_BRIDGE_MAX_NO_OUTPUT_TIMEOUT_MS || '900000'), 10) || 900000;
+const containerUseEnabled = String(process.env.GOOSE_BRIDGE_CONTAINER_USE || '1').trim() !== '0';
+const containerUseBuiltin = String(process.env.GOOSE_BRIDGE_CONTAINER_USE_BUILTIN || 'container-use').trim() || 'container-use';
 
 const activeChildren = new Set();
 const startedAt = Date.now();
@@ -98,6 +100,28 @@ function sanitizeEnv(env) {
     out[k] = String(value);
   }
   return out;
+}
+
+function injectContainerUseBuiltin(args) {
+  const list = Array.isArray(args) ? [...args] : [];
+  if (!containerUseEnabled) return { args: list, injected: false };
+  if (!list.length || list[0] !== 'run') return { args: list, injected: false };
+  const idx = list.findIndex((item) => item === '--with-builtin');
+  if (idx >= 0 && idx + 1 < list.length) {
+    const raw = String(list[idx + 1] || '').trim();
+    const parts = raw
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (!parts.includes(containerUseBuiltin)) {
+      parts.push(containerUseBuiltin);
+      list[idx + 1] = parts.join(',');
+      return { args: list, injected: true };
+    }
+    return { args: list, injected: false };
+  }
+  list.splice(1, 0, '--with-builtin', containerUseBuiltin);
+  return { args: list, injected: true };
 }
 
 function ensureValidCwd(cwd) {
@@ -186,7 +210,9 @@ async function runStream(req, res, rid) {
     return;
   }
 
-  const args = Array.isArray(body?.args) ? body.args.map((v) => String(v)) : null;
+  const rawArgs = Array.isArray(body?.args) ? body.args.map((v) => String(v)) : null;
+  const injected = injectContainerUseBuiltin(rawArgs || []);
+  const args = injected.args;
   if (!args || !args.length) {
     writeJson(res, 400, { error: 'args_required', requestId: rid }, rid);
     return;
@@ -214,6 +240,10 @@ async function runStream(req, res, rid) {
     connection: 'keep-alive',
     'x-request-id': rid
   });
+
+  if (injected.injected) {
+    writeEvent(res, { type: 'info', message: `container-use builtin injected (${containerUseBuiltin})`, requestId: rid });
+  }
 
   const child = spawn('goose', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
