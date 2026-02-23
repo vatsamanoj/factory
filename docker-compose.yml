@@ -15,6 +15,10 @@ services:
       GOOSE_BRIDGE_URL: http://host.docker.internal:8788
       GOOSE_BRIDGE_TOKEN: ${GOOSE_BRIDGE_TOKEN:-factory-bridge-token}
       GOOSE_BRIDGE_CWD_MAP: /work/repo:/home/infosys/work/repo
+      GOOSE_BRIDGE_PROBE_RETRIES: "3"
+      GOOSE_BRIDGE_CONNECT_RETRIES: "2"
+      GOOSE_BRIDGE_FETCH_TIMEOUT_MS: "12000"
+      GOOSE_BRIDGE_RETRY_BASE_MS: "400"
       GOOSE_HOME: /app/server/data/goose-runtime
       GOOSE_PRESERVE_HOME: "0"
       XDG_CONFIG_HOME: /app/server/data/goose-runtime/.config

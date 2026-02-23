@@ -534,18 +534,42 @@ function mapCwdForGooseBridge(cwd, bridgeConfig) {
 }
 
 async function probeGooseBridge(bridgeConfig) {
+  const maxAttempts = parsePositiveInt(process.env.GOOSE_BRIDGE_PROBE_RETRIES, 3);
+  const fetchTimeoutMs = parsePositiveInt(process.env.GOOSE_BRIDGE_FETCH_TIMEOUT_MS, 12000);
+  const retryBaseMs = parsePositiveInt(process.env.GOOSE_BRIDGE_RETRY_BASE_MS, 400);
   const headers = { 'content-type': 'application/json' };
   if (bridgeConfig.token) headers['x-goose-bridge-token'] = bridgeConfig.token;
-  const response = await fetch(`${bridgeConfig.url}/v1/probe`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({})
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    return { ok: false, reason: String(payload?.error || `http_${response.status}`) };
+  let lastReason = '';
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const response = await fetch(`${bridgeConfig.url}/v1/probe`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({}),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      // eslint-disable-next-line no-await-in-loop
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok) {
+        return { ok: Boolean(payload?.ok), reason: String(payload?.reason || payload?.version || '') };
+      }
+      lastReason = String(payload?.error || payload?.reason || `http_${response.status}`);
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable || attempt >= maxAttempts) break;
+    } catch (error) {
+      clearTimeout(timer);
+      const message = String(error?.name === 'AbortError' ? `bridge probe timeout ${fetchTimeoutMs}ms` : error?.message || error);
+      lastReason = message;
+      if (attempt >= maxAttempts) break;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(computeBackoffMs(attempt, retryBaseMs, 2500));
   }
-  return { ok: Boolean(payload?.ok), reason: String(payload?.reason || payload?.version || '') };
+  return { ok: false, reason: lastReason || 'bridge probe failed' };
 }
 
 async function runGooseThroughBridge({
@@ -558,23 +582,46 @@ async function runGooseThroughBridge({
   onStdoutLine,
   onStderrLine
 }) {
+  const connectAttempts = parsePositiveInt(process.env.GOOSE_BRIDGE_CONNECT_RETRIES, 2);
+  const fetchTimeoutMs = parsePositiveInt(process.env.GOOSE_BRIDGE_FETCH_TIMEOUT_MS, 12000);
+  const retryBaseMs = parsePositiveInt(process.env.GOOSE_BRIDGE_RETRY_BASE_MS, 400);
   const headers = { 'content-type': 'application/json' };
   if (bridgeConfig.token) headers['x-goose-bridge-token'] = bridgeConfig.token;
-  const response = await fetch(`${bridgeConfig.url}/v1/run-stream`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      args,
-      cwd,
-      env,
-      timeoutMs,
-      noOutputTimeoutMs
-    })
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    return { code: 1, reason: text || `http_${response.status}` };
+  let response = null;
+  let openReason = '';
+  for (let attempt = 1; attempt <= connectAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      response = await fetch(`${bridgeConfig.url}/v1/run-stream`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          args,
+          cwd,
+          env,
+          timeoutMs,
+          noOutputTimeoutMs
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (response.ok) break;
+      // eslint-disable-next-line no-await-in-loop
+      const text = await response.text().catch(() => '');
+      openReason = text || `http_${response.status}`;
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable || attempt >= connectAttempts) return { code: 1, reason: openReason };
+    } catch (error) {
+      clearTimeout(timer);
+      openReason = String(error?.name === 'AbortError' ? `bridge connect timeout ${fetchTimeoutMs}ms` : error?.message || error);
+      if (attempt >= connectAttempts) return { code: 1, reason: openReason };
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(computeBackoffMs(attempt, retryBaseMs, 2500));
   }
+  if (!response || !response.ok) return { code: 1, reason: openReason || 'bridge connect failed' };
   if (!response.body) return { code: 1, reason: 'empty response body from bridge' };
 
   const reader = response.body.getReader();
@@ -604,6 +651,8 @@ async function runGooseThroughBridge({
         if (typeof event.line === 'string') onStdoutLine(event.line);
       } else if (type === 'stderr') {
         if (typeof event.line === 'string') onStderrLine(event.line);
+      } else if (type === 'heartbeat') {
+        // Keepalive from bridge; no-op.
       } else if (type === 'close') {
         closeCode = Number.isFinite(Number(event.code)) ? Number(event.code) : closeCode;
         reason = String(event.reason || reason || '').trim();
@@ -626,6 +675,9 @@ async function runGooseThroughBridge({
     }
   }
 
+  if (!reason && closeCode !== 0) {
+    reason = 'bridge stream ended without explicit close reason';
+  }
   return { code: closeCode, reason };
 }
 
