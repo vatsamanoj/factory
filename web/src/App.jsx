@@ -17,6 +17,7 @@ import {
   connectProjectRepo,
   getProjectBranches,
   getProjectRepoStatus,
+  getBridgeDiagnostics,
   createProject,
   createCycle,
   createModule,
@@ -158,6 +159,9 @@ export default function App() {
   const [projectInfo, setProjectInfo] = useState('');
   const [projectBusy, setProjectBusy] = useState(false);
   const [repoStatusByProject, setRepoStatusByProject] = useState({});
+  const [bridgeDiagnostics, setBridgeDiagnostics] = useState(null);
+  const [bridgeDiagnosticsError, setBridgeDiagnosticsError] = useState('');
+  const [bridgeDiagnosticsBusy, setBridgeDiagnosticsBusy] = useState(false);
   const [branchOptionsByProject, setBranchOptionsByProject] = useState({});
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [theme, setTheme] = useState('default');
@@ -171,6 +175,19 @@ export default function App() {
     moduleId: ''
   });
   const recognitionRef = useRef(null);
+
+  async function loadBridgeDiagnostics({ silent = false } = {}) {
+    if (!silent) setBridgeDiagnosticsBusy(true);
+    setBridgeDiagnosticsError('');
+    try {
+      const data = await getBridgeDiagnostics();
+      setBridgeDiagnostics(data || null);
+    } catch (error) {
+      setBridgeDiagnosticsError(String(error?.message || error || 'Failed to fetch bridge diagnostics'));
+    } finally {
+      if (!silent) setBridgeDiagnosticsBusy(false);
+    }
+  }
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem('goose-theme') || 'default';
@@ -256,6 +273,22 @@ export default function App() {
         setRepoStatusByProject((prev) => ({ ...prev, [activeProjectId]: { error: 'Unable to read repo status' } }));
       });
   }, [activeProjectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async (silent) => {
+      if (cancelled) return;
+      await loadBridgeDiagnostics({ silent });
+    };
+    run(false);
+    const timer = setInterval(() => {
+      run(true);
+    }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const socket = openTaskSocket({
@@ -857,6 +890,42 @@ export default function App() {
         </div>
 
         <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+          <div className="rounded-xl border border-border bg-panel p-3 shadow-card">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Bridge Diagnostics</h3>
+              <button
+                type="button"
+                onClick={() => loadBridgeDiagnostics({ silent: false })}
+                disabled={bridgeDiagnosticsBusy}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {bridgeDiagnosticsBusy ? 'Checking...' : 'Refresh'}
+              </button>
+            </div>
+            <div className="mb-2 flex items-center gap-2 text-xs">
+              <span className={`inline-flex h-2.5 w-2.5 rounded-full ${bridgeDiagnostics?.ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
+              <span className="font-semibold text-ink">{bridgeDiagnostics?.ok ? 'Bridge reachable' : 'Bridge not reachable'}</span>
+              {bridgeDiagnostics?.inContainer ? <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-muted">container runtime</span> : null}
+            </div>
+            {bridgeDiagnosticsError ? <p className="mb-2 text-xs text-danger">{bridgeDiagnosticsError}</p> : null}
+            <div className="space-y-1.5">
+              {(bridgeDiagnostics?.diagnostics || []).map((item) => (
+                <div key={item.url} className="rounded-md border border-border bg-surface px-2 py-1.5 text-xs">
+                  <p className="truncate font-semibold text-ink">{item.url}</p>
+                  <p className={`text-[11px] ${item.reachable ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {item.reachable ? 'reachable' : 'unreachable'}
+                  </p>
+                  {!item.reachable ? (
+                    <p className="truncate text-[11px] text-muted">
+                      {item.probe?.error || item.health?.error || item.probe?.body || item.health?.body || 'No response'}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+              {!bridgeDiagnostics?.diagnostics?.length ? <p className="text-xs text-muted">No diagnostics data yet.</p> : null}
+            </div>
+          </div>
+
           <div className="no-scrollbar flex gap-2 overflow-x-auto lg:hidden">
             {SECTION_TABS.map((tab) => (
               <button key={tab.id} type="button" onClick={() => setActiveSection(tab.id)} className={`whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-semibold ${activeSection === tab.id ? 'bg-accent text-white' : 'bg-surface text-ink'}`}>{tab.label}</button>

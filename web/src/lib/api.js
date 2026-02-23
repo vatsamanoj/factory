@@ -237,3 +237,8 @@ export async function getProjectBranches(projectId) {
   const res = await fetch(`/api/projects/${projectId}/branches`);
   return parseApiResponse(res, 'Failed to fetch project branches');
 }
+
+export async function getBridgeDiagnostics() {
+  const res = await fetch('/api/bridge/diagnostics');
+  return parseApiResponse(res, 'Failed to fetch bridge diagnostics');
+}
