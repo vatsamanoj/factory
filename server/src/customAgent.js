@@ -1,6 +1,7 @@
 import { appendTaskLog, updateTask, getCustomAgentApiKey } from './db.js';
 import { create_agent } from './customAgentCompanion.js';
 import { spawn } from 'node:child_process';
+import { ensureProjectRepoReady, ensureTaskBranch } from './repoManager.js';
 
 const AGENT_NAME = 'Custom Ember';
 
@@ -48,8 +49,8 @@ async function resolveRef(repoPath, refName) {
   return '';
 }
 
-async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls }) {
-  const repoPath = String(project?.repoPath || '').trim();
+async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls, repoPathOverride = '' }) {
+  const repoPath = String(repoPathOverride || project?.repoPath || '').trim();
   if (!repoPath) {
     return { ok: false, reason: 'project repo path is missing' };
   }
@@ -91,6 +92,30 @@ async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls
 export async function runCustomAgent({ task, broadcast, hydratedPrompt, project, shouldStop }) {
   emitLog(task.id, broadcast, 'initializing custom agent runtime');
   updateTask(task.id, { runtimeStatus: 'running' });
+  let executionTask = task;
+  let repoPath = String(project?.repoPath || '').trim();
+  try {
+    const preferredBranch = String(task?.branchName || task?.baseBranch || project?.defaultBranch || '').trim();
+    const repo = await ensureProjectRepoReady(
+      project,
+      (line) => emitLog(task.id, broadcast, line),
+      preferredBranch ? { preferredBranch } : {}
+    );
+    repoPath = String(repo?.repoPath || repoPath || '').trim();
+    const branchName = await ensureTaskBranch(repo, task, (line) => emitLog(task.id, broadcast, line));
+    if (branchName && branchName !== String(task?.branchName || '')) {
+      const patched = updateTask(task.id, { branchName });
+      if (patched) executionTask = patched;
+      emitLog(task.id, broadcast, `repo preflight ready: branch=${branchName}`);
+    } else {
+      emitLog(task.id, broadcast, `repo preflight ready: branch=${branchName || task?.branchName || '(none)'}`);
+    }
+  } catch (error) {
+    emitLog(task.id, broadcast, `repo preflight failed: ${String(error?.message || error)}`);
+    const failed = updateTask(task.id, { runtimeStatus: 'failed', status: 'todo' });
+    if (broadcast) broadcast({ type: 'task_status', task: failed });
+    return { status: 'failed' };
+  }
   const apiKey = getCustomAgentApiKey();
   if (!apiKey) {
     emitLog(task.id, broadcast, 'missing API key: unable to reach LLM');
@@ -104,8 +129,8 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
     model: process.env.CUSTOM_AGENT_MODEL || 'glm-5',
     api_key: apiKey,
     base_url: process.env.CUSTOM_AGENT_BASE_URL || 'https://api.openai.com',
-    default_cwd: project?.repoPath || process.cwd(),
-    task_hint: `${task?.title || ''} ${task?.description || ''} ${project?.name || ''} ${task?.baseBranch || ''}`,
+    default_cwd: repoPath || process.cwd(),
+    task_hint: `${executionTask?.title || ''} ${executionTask?.description || ''} ${project?.name || ''} ${executionTask?.baseBranch || ''}`,
     on_trace: (line) => emitLog(task.id, broadcast, line)
   });
   emitLog(
@@ -146,9 +171,10 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
   }
   const gitEvidence = await verifyGitMergeEvidence({
     project,
-    task,
+    task: executionTask,
     hydratedPrompt,
-    toolCalls: response.toolCalls || []
+    toolCalls: response.toolCalls || [],
+    repoPathOverride: repoPath
   });
   if (!gitEvidence.ok) {
     emitLog(task.id, broadcast, `completion rejected: ${gitEvidence.reason}`);
@@ -161,7 +187,7 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
     broadcast,
     `verified git evidence: ${gitEvidence.workRef} is merged into ${gitEvidence.baseRef}; promoting task to review`
   );
-  if (gitEvidence.workBranch && gitEvidence.workBranch !== String(task.branchName || '')) {
+  if (gitEvidence.workBranch && gitEvidence.workBranch !== String(executionTask.branchName || '')) {
     updateTask(task.id, { branchName: gitEvidence.workBranch });
   }
   const updated = updateTask(task.id, { status: 'review', runtimeStatus: 'success' });
