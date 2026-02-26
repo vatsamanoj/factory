@@ -144,6 +144,12 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS agent_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
 `);
 
 db.exec('CREATE INDEX IF NOT EXISTS idx_execution_leases_expires_at ON execution_leases(expires_at);');
@@ -406,6 +412,7 @@ function buildDynamicUpdate(patch, fieldMap) {
   for (const [key, config] of Object.entries(fieldMap)) {
     if (!hasOwn(patch, key)) continue;
     const value = config.toDb ? config.toDb(patch[key]) : patch[key];
+    if (value === undefined) continue;
     sets.push(`${config.column} = ?`);
     values.push(value);
   }
@@ -771,6 +778,20 @@ export function getAnalyticsSnapshot(projectId) {
     byAssignee,
     generatedAt: new Date().toISOString()
   };
+}
+
+export function getCustomAgentApiKey() {
+  const row = db.prepare('SELECT value FROM agent_settings WHERE key = ?').get('custom_agent_api_key');
+  return row ? String(row.value || '') : '';
+}
+
+export function setCustomAgentApiKey(value) {
+  const now = new Date().toISOString();
+  const key = 'custom_agent_api_key';
+  db.prepare(
+    'INSERT INTO agent_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+  ).run(key, String(value || ''), now);
+  return String(value || '');
 }
 
 export function appendTaskLog(taskId, line) {

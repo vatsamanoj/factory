@@ -733,7 +733,7 @@ export default function App() {
     setProjectError('');
     setProjectInfo('');
     try {
-      const { project } = await updateProject(selected.id, {
+      const response = await updateProject(selected.id, {
         repoUrl: selected.repoUrl,
         repoPath: selected.repoPath,
         defaultBranch: selected.defaultBranch || 'main',
@@ -741,10 +741,11 @@ export default function App() {
         autoPr: Boolean(selected.autoPr),
         autoMerge: Boolean(selected.autoMerge)
       });
+      const { project, warning } = response;
       setProjects((prev) => prev.map((row) => (row.id === project.id ? project : row)));
       const statusRes = await getProjectRepoStatus(project.id);
       setRepoStatusByProject((prev) => ({ ...prev, [String(project.id)]: statusRes.status || {} }));
-      setProjectInfo('Repository configuration saved.');
+      setProjectInfo(warning || 'Repository configuration saved.');
     } catch (error) {
       setProjectError(error?.message || 'Failed to save repository configuration.');
     } finally {

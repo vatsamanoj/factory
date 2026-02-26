@@ -16,7 +16,7 @@ npm run dev
 
 Apps:
 - Web PWA: `http://localhost:5173`
-- API/WebSocket server: `http://localhost:8799`
+- API/WebSocket server: `http://localhost:8787`
 
 ## What Is Included
 
@@ -28,24 +28,17 @@ Apps:
 - Plugin registry UI + backend endpoints
 - PWA base setup: `manifest.json`, service worker, offline shell, push notification handler
 
-## Goose + MCP (Real Mode)
+## Custom Agent Runtime
 
-By default, Goose real execution is enabled. Set `GOOSE_REAL=0` to force mock mode.
+The dashboard now runs the built-in Custom Agent (`server/src/customAgent.js`) for every task. There is no longer a Goose CLI dependency or runtime toggle—every work item flows through the same hydration/prompt/log pipeline that the dashboard already uses.
 
-The runtime now supports plugin-driven extension loading:
-- `type: "mcp"` or `type: "mcp_stdio"`: `url` is a full stdio command (for `--with-extension`)
-- `type: "mcp_http"`: `url` is a streamable MCP URL (for `--with-streamable-http-extension`)
-- `type: "builtin"`: `url` is a Goose builtin extension name
-- `type: "agent"`: `url` format `provider:model` (for example `openai:gpt-5-codex`)
+### Companion Tool Loop
 
-Important:
-- Goose needs writable runtime dirs. This project sets isolated paths under workspace (`.goose-home`, `.cache`, `.config`).
-- For Kilo Code host execution, `docker/start-goose-bridge.sh` auto-loads:
-  - `GOOSE_PROVIDER=custom_kilo_code`
-  - `GOOSE_MODEL=moonshotai/kimi-k2.5`
-  - `CUSTOM_KILO_CODE_API_KEY` (from `/home/infosys/.config/goose/secrets.yaml` if not already exported)
-  - `container-use` builtin injection for host Goose runs
-  - Optional override file: `server/data/goose-bridge.env`
+The agent includes an internal companion runner (`server/src/customAgentCompanion.js`) inspired by `zeroclaw-tools`. It provides `shell` and `file_read` tools and enforces the LangGraph-style loop where the model emits `TOOL_CALL: {"name":"<tool>","args":{...}}`, the companion executes that helper, and then feeds the tool output back into the conversation before polling the model again. This keeps tool use consistent across providers such as GLM-5/Zhipu even when their native tool-calling is flaky.
+
+## Custom Agent API Key
+
+To enable LLM access, POST `{ "apiKey": "sk-..." }` to `/api/custom-agent/key`; the key is stored in `agent_settings` (database column `value`) and survives restarts. Retrieve the masked key via `GET /api/custom-agent/key` for confirmation, and the agent logs whether a key is present before each run. Use the same endpoint from CI scripts or an admin UI to rotate keys.
 
 ## Database Path Rule
 

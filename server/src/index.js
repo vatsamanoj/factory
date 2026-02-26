@@ -6,27 +6,29 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
+  appendTaskLog,
   createCycle,
   createModule,
-  createProject,
-  createPlugin,
   createPage,
+  createPlugin,
+  createProject,
   createTask,
   createView,
-  appendTaskLog,
   getAnalyticsSnapshot,
+  getCustomAgentApiKey,
   getProject,
   getTask,
-  listTaskLogs,
   listCycles,
   listModules,
-  listProjects,
-  listPlugins,
   listPages,
+  listPlugins,
+  listProjects,
+  listTaskLogs,
   listTasks,
   listViews,
-  updateProject,
+  setCustomAgentApiKey,
   updatePage,
+  updateProject,
   updateTask
 } from './db.js';
 import { hydratePrompt } from './contextHydrator.js';
@@ -381,6 +383,29 @@ app.get('/api/plugins/diagnostics', async (_, res) => {
   }
 });
 
+function maskApiKey(value) {
+  if (!value) return '';
+  const raw = String(value || '');
+  if (raw.length <= 8) {
+    return `${raw.slice(0, 2)}••••${raw.slice(-2)}`;
+  }
+  return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
+}
+
+app.get('/api/custom-agent/key', (_, res) => {
+  const key = getCustomAgentApiKey();
+  res.json({ apiKey: maskApiKey(key) });
+});
+
+app.post('/api/custom-agent/key', (req, res) => {
+  const key = String(req.body?.apiKey || '').trim();
+  if (!key) {
+    return res.status(400).json({ error: 'apiKey is required' });
+  }
+  setCustomAgentApiKey(key);
+  res.json({ apiKey: maskApiKey(key) });
+});
+
 app.post('/api/tasks/:taskId/approve', (req, res) => {
   const taskId = Number(req.params.taskId);
   const task = getTask(taskId);
@@ -608,13 +633,6 @@ app.put('/api/projects/:projectId', async (req, res) => {
   const current = getProject(projectId);
   if (!current) return res.status(404).json({ error: 'Project not found' });
   const nextInput = { ...current, ...(req.body || {}) };
-  const verified = await verifyRepoConnectivity(nextInput);
-  if (!verified.ok) {
-    return res.status(400).json({
-      error: 'Repository connectivity failed. Recheck repo URL/path/token.',
-      details: verified.errors
-    });
-  }
   const project = updateProject(projectId, {
     name: req.body?.name,
     description: req.body?.description,
@@ -625,6 +643,14 @@ app.put('/api/projects/:projectId', async (req, res) => {
     autoPr: req.body?.autoPr,
     autoMerge: req.body?.autoMerge
   });
+  const verified = await verifyRepoConnectivity(nextInput);
+  if (!verified.ok) {
+    return res.json({
+      project,
+      connectivity: verified,
+      warning: 'Project saved, but repository connectivity check failed.'
+    });
+  }
   res.json({ project, connectivity: verified });
 });
 
