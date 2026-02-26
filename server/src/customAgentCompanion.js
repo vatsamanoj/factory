@@ -166,8 +166,9 @@ async function parseErrorSnippet(response) {
   }
 }
 
-async function callProvider({ url, model, apiKey, messages }) {
+async function callProvider({ url, model, apiKey, messages, onTrace }) {
   if (String(url || '').startsWith('mock://')) {
+    onTrace?.(`llm> mock provider request model=${model}`);
     const hasShell = messages.some((msg) => msg?.role === 'tool' && msg?.name === 'shell');
     const hasFileRead = messages.some((msg) => msg?.role === 'tool' && msg?.name === 'file_read');
     if (!hasShell) {
@@ -183,6 +184,7 @@ async function callProvider({ url, model, apiKey, messages }) {
   const errors = [];
   const timeoutMs = parsePositiveInt(process.env.CUSTOM_AGENT_HTTP_TIMEOUT_MS, 45000);
   for (const endpoint of endpoints) {
+    onTrace?.(`llm> request endpoint=${endpoint} model=${model}`);
     const headers = {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
@@ -208,6 +210,7 @@ async function callProvider({ url, model, apiKey, messages }) {
         signal: controller.signal
       });
     } catch (error) {
+      onTrace?.(`llm> network_error endpoint=${endpoint} message=${String(error?.message || error)}`);
       errors.push(`${endpoint} -> network error: ${String(error?.message || error)}`);
       clearTimeout(timer);
       continue;
@@ -215,17 +218,22 @@ async function callProvider({ url, model, apiKey, messages }) {
     clearTimeout(timer);
     if (!res.ok) {
       const detail = await parseErrorSnippet(res);
+      onTrace?.(`llm> response endpoint=${endpoint} status=${res.status}${detail ? ` detail=${detail}` : ''}`);
       errors.push(`${endpoint} -> ${res.status}${detail ? `: ${detail}` : ''}`);
       continue;
     }
     const payload = await res.json();
+    const usage = payload?.usage
+      ? ` prompt=${payload.usage.prompt_tokens ?? '?'} completion=${payload.usage.completion_tokens ?? '?'} total=${payload.usage.total_tokens ?? '?'}`
+      : '';
+    onTrace?.(`llm> response endpoint=${endpoint} status=${res.status}${usage}`);
     return payload.choices?.[0]?.message?.content || '';
   }
 
   throw new Error(`LLM request failed. Tried endpoints: ${errors.join(' | ')}`);
 }
 
-export function create_agent({ tools = [], model = 'glm-5', api_key, base_url, default_cwd, task_hint = '' }) {
+export function create_agent({ tools = [], model = 'glm-5', api_key, base_url, default_cwd, task_hint = '', on_trace }) {
   if (!api_key) throw new Error('api_key is required');
   const toolset = new Map();
   [defaultShellTool, defaultFileReadTool, ...tools].forEach((tool) => {
@@ -243,7 +251,8 @@ export function create_agent({ tools = [], model = 'glm-5', api_key, base_url, d
           url: base_url,
           model,
           apiKey: api_key,
-          messages: history
+          messages: history,
+          onTrace: on_trace
         });
         history.push({ role: 'assistant', content: assistantOutput });
         const toolCall = parseToolCall(assistantOutput);
