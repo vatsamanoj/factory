@@ -67,6 +67,11 @@ async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls
   if (!gitToolRuns.length) {
     return { ok: false, reason: 'no git shell tool-call evidence in agent run' };
   }
+  const hasCommitEvidence = gitToolRuns.some((event) => /\bgit\s+commit\b/i.test(String(event?.args?.command || '')));
+  const hasPushEvidence = gitToolRuns.some((event) => /\bgit\s+push\b/i.test(String(event?.args?.command || '')));
+  if (!hasCommitEvidence || !hasPushEvidence) {
+    return { ok: false, reason: 'missing git write evidence in this run (require git commit + git push)' };
+  }
 
   const repoCheck = await runGit(repoPath, ['rev-parse', '--is-inside-work-tree']);
   if (!repoCheck.ok) {
