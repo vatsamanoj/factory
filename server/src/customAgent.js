@@ -1,7 +1,7 @@
 import { appendTaskLog, updateTask, getCustomAgentApiKey } from './db.js';
 import { create_agent } from './customAgentCompanion.js';
 import { spawn } from 'node:child_process';
-import { ensureProjectRepoReady, ensureTaskBranch } from './repoManager.js';
+import { ensureProjectRepoReady, ensureTaskBranch, autoMergeTaskBranchToTest } from './repoManager.js';
 
 const AGENT_NAME = 'Custom Ember';
 
@@ -49,7 +49,7 @@ async function resolveRef(repoPath, refName) {
   return '';
 }
 
-async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls, repoPathOverride = '' }) {
+async function verifyGitMergeEvidence({ project, task, hydratedPrompt, repoPathOverride = '' }) {
   const repoPath = String(repoPathOverride || project?.repoPath || '').trim();
   if (!repoPath) {
     return { ok: false, reason: 'project repo path is missing' };
@@ -59,18 +59,6 @@ async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls
   const baseBranch = String(task?.baseBranch || parsed.baseBranch || project?.defaultBranch || 'main').trim() || 'main';
   if (!workBranch) {
     return { ok: false, reason: 'work branch could not be determined from task/prompt' };
-  }
-
-  const gitToolRuns = (toolCalls || []).filter(
-    (event) => event?.tool === 'shell' && /\bgit\b/i.test(String(event?.args?.command || ''))
-  );
-  if (!gitToolRuns.length) {
-    return { ok: false, reason: 'no git shell tool-call evidence in agent run' };
-  }
-  const hasCommitEvidence = gitToolRuns.some((event) => /\bgit\s+commit\b/i.test(String(event?.args?.command || '')));
-  const hasPushEvidence = gitToolRuns.some((event) => /\bgit\s+push\b/i.test(String(event?.args?.command || '')));
-  if (!hasCommitEvidence || !hasPushEvidence) {
-    return { ok: false, reason: 'missing git write evidence in this run (require git commit + git push)' };
   }
 
   const repoCheck = await runGit(repoPath, ['rev-parse', '--is-inside-work-tree']);
@@ -94,11 +82,62 @@ async function verifyGitMergeEvidence({ project, task, hydratedPrompt, toolCalls
   return { ok: true, baseBranch, workBranch, baseRef, workRef };
 }
 
+async function finalizeGitWorkflow({ repo, project, task, hydratedPrompt, broadcast }) {
+  const parsed = parsePromptGitTargets(hydratedPrompt, project?.defaultBranch || task?.baseBranch || 'main', task?.branchName || '');
+  const workBranch = String(task?.branchName || parsed.workBranch || '').trim();
+  const baseBranch = String(task?.baseBranch || parsed.baseBranch || project?.defaultBranch || 'main').trim() || 'main';
+  if (!repo?.repoPath) {
+    return { ok: false, reason: 'missing repo path for git finalize workflow' };
+  }
+  if (!workBranch) {
+    return { ok: false, reason: 'missing work branch for git finalize workflow' };
+  }
+
+  const checkout = await runGit(repo.repoPath, ['checkout', workBranch]);
+  if (!checkout.ok) {
+    return { ok: false, reason: `unable to checkout work branch ${workBranch}: ${checkout.err || checkout.out}` };
+  }
+
+  const status = await runGit(repo.repoPath, ['status', '--porcelain']);
+  const dirtyLines = String(status.out || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (dirtyLines.length) {
+    emitLog(task.id, broadcast, `git finalize: staging ${dirtyLines.length} changed files`);
+    const add = await runGit(repo.repoPath, ['add', '-A']);
+    if (!add.ok) {
+      return { ok: false, reason: `git add failed: ${add.err || add.out}` };
+    }
+    const taskKey = String(task?.externalId || `GSE-${task?.id || 'task'}`).trim();
+    const title = String(task?.title || 'agent update').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const commit = await runGit(repo.repoPath, ['commit', '-m', `${taskKey}: ${title}`]);
+    if (!commit.ok) {
+      return { ok: false, reason: `git commit failed: ${commit.err || commit.out}` };
+    }
+    emitLog(task.id, broadcast, `git finalize: commit created on ${workBranch}`);
+  } else {
+    emitLog(task.id, broadcast, `git finalize: no local changes on ${workBranch}`);
+  }
+
+  if (project?.autoMerge) {
+    try {
+      await autoMergeTaskBranchToTest(repo, task, (line) => emitLog(task.id, broadcast, line), baseBranch);
+      return { ok: true, merged: true, baseBranch, workBranch };
+    } catch (error) {
+      return { ok: false, reason: `auto-merge failed: ${String(error?.message || error)}` };
+    }
+  }
+
+  return { ok: true, merged: false, baseBranch, workBranch };
+}
+
 export async function runCustomAgent({ task, broadcast, hydratedPrompt, project, shouldStop }) {
   emitLog(task.id, broadcast, 'initializing custom agent runtime');
   updateTask(task.id, { runtimeStatus: 'running' });
   let executionTask = task;
   let repoPath = String(project?.repoPath || '').trim();
+  let repoInfo = null;
   try {
     const preferredBranch = String(task?.branchName || task?.baseBranch || project?.defaultBranch || '').trim();
     const repo = await ensureProjectRepoReady(
@@ -106,6 +145,7 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
       (line) => emitLog(task.id, broadcast, line),
       preferredBranch ? { preferredBranch } : {}
     );
+    repoInfo = repo;
     repoPath = String(repo?.repoPath || repoPath || '').trim();
     const branchName = await ensureTaskBranch(repo, task, (line) => emitLog(task.id, broadcast, line));
     if (branchName && branchName !== String(task?.branchName || '')) {
@@ -174,11 +214,23 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
     if (broadcast) broadcast({ type: 'task_status', task: stopped });
     return { status: 'stopped' };
   }
+  const finalized = await finalizeGitWorkflow({
+    repo: repoInfo,
+    project,
+    task: executionTask,
+    hydratedPrompt,
+    broadcast
+  });
+  if (!finalized.ok) {
+    emitLog(task.id, broadcast, `completion rejected: ${finalized.reason}`);
+    const failed = updateTask(task.id, { runtimeStatus: 'failed', status: 'todo' });
+    if (broadcast) broadcast({ type: 'task_status', task: failed });
+    return { status: 'failed' };
+  }
   const gitEvidence = await verifyGitMergeEvidence({
     project,
     task: executionTask,
     hydratedPrompt,
-    toolCalls: response.toolCalls || [],
     repoPathOverride: repoPath
   });
   if (!gitEvidence.ok) {
