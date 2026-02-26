@@ -171,9 +171,9 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
   const mask = apiKey.length > 8 ? `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}` : `${apiKey.slice(0, 2)}••••`;
   emitLog(task.id, broadcast, `using provisioned API key ${mask}`);
   const companion = create_agent({
-    model: process.env.CUSTOM_AGENT_MODEL || 'glm-5',
+    model: process.env.CUSTOM_AGENT_MODEL || 'gpt-4o-mini',
     api_key: apiKey,
-    base_url: process.env.CUSTOM_AGENT_BASE_URL || 'https://api.openai.com',
+    base_url: process.env.CUSTOM_AGENT_BASE_URL || 'https://api.kilo.ai/api/gateway',
     default_cwd: repoPath || process.cwd(),
     task_hint: `${executionTask?.title || ''} ${executionTask?.description || ''} ${project?.name || ''} ${executionTask?.baseBranch || ''}`,
     on_trace: (line) => emitLog(task.id, broadcast, line)
@@ -181,7 +181,7 @@ export async function runCustomAgent({ task, broadcast, hydratedPrompt, project,
   emitLog(
     task.id,
     broadcast,
-    `llm config model=${process.env.CUSTOM_AGENT_MODEL || 'glm-5'} base_url=${process.env.CUSTOM_AGENT_BASE_URL || 'https://api.openai.com'}`
+    `llm config model=${process.env.CUSTOM_AGENT_MODEL || 'gpt-4o-mini'} base_url=${process.env.CUSTOM_AGENT_BASE_URL || 'https://api.kilo.ai/api/gateway'}`
   );
   const systemMessage = {
     role: 'system',
